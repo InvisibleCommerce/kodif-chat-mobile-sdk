@@ -147,7 +147,7 @@ dependencyResolutionManagement {
 
 // app/build.gradle.kts
 dependencies {
-    implementation("com.github.InvisibleCommerce:kodif-chat-mobile:<tag>")
+    implementation("com.github.InvisibleCommerce:kodif-chat-mobile:0.1.0")
 }
 ```
 
