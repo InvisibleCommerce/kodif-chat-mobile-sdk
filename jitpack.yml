@@ -1,0 +1,5 @@
+# JitPack builds tags: com.github.InvisibleCommerce:kodif-chat-mobile:<tag>
+jdk:
+  - openjdk17
+install:
+  - cd android && ./gradlew :kodifchat:publishReleasePublicationToMavenLocal

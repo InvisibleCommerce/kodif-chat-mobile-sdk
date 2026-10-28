@@ -6,7 +6,6 @@ DerivedData/
 .build/
 .swiftpm/
 /Package.resolved
-ios/Example/*.xcodeproj/
 
 # Android / Gradle
 .gradle/
