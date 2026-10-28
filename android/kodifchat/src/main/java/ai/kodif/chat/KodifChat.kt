@@ -136,6 +136,12 @@ public object KodifChat {
         context.startActivity(intent)
     }
 
+    /** Tests: discard the running chat. */
+    internal fun discardSession() {
+        session?.destroy()
+        session = null
+    }
+
     internal fun requireSession(): KodifChatSession {
         session?.let { return it }
         val context = checkNotNull(appContext) { "Call KodifChat.configure(...) first" }

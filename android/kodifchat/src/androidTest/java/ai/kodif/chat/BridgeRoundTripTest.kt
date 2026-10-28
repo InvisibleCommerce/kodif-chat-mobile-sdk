@@ -38,7 +38,7 @@ class BridgeRoundTripTest {
     @After
     fun tearDown() {
         instrumentation.runOnMainSync {
-            KodifChat.session?.destroy()
+            KodifChat.discardSession()
             KodifChat.tokenProvider = null
         }
     }
