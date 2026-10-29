@@ -1,0 +1,60 @@
+name: iOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner's default Xcode, with an iPhone simulator on the runtime that matches its SDK (names change between
+      # images). A newer runtime than the SDK runs WebKit very slowly: its processes took over a minute to launch.
+      - name: Pick and boot an iPhone simulator
+        id: simulator
+        run: |
+          sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          echo "iOS Simulator SDK $sdk"
+          udid=$(SDK="$sdk" python3 -c 'import json, os, subprocess
+          devices = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))["devices"]
+          sdk = os.environ["SDK"].replace(".", "-")
+          runtimes = sorted((r for r in devices if ".iOS-" in r), key=lambda r: [int(p) for p in r.split(".iOS-")[1].split("-")])
+          matching = [r for r in runtimes if r.endswith(".iOS-" + sdk)] or [r for r in runtimes if r.split(".iOS-")[1].split("-")[0] == sdk.split("-")[0]] or runtimes
+          print(next(d["udid"] for r in reversed(matching) for d in devices[r] if d["name"].startswith("iPhone")))')
+          xcrun simctl list devices | grep "$udid"
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+          # Boot before the tests, so the simulator's first-boot work isn't charged to the first WKWebView test.
+          xcrun simctl boot "$udid" || true
+          xcrun simctl bootstatus "$udid" -b
+
+      - name: Test KodifChat
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -scheme KodifChat \
+            -destination 'id=${{ steps.simulator.outputs.udid }}' \
+            -resultBundlePath build/KodifChatTests.xcresult
+
+      - name: Build the example app
+        working-directory: ios/Example
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project KodifChatExample.xcodeproj \
+            -scheme KodifChatExample \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ios-test-results
+          path: build/KodifChatTests.xcresult

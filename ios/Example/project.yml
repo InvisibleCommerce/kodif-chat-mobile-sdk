@@ -1,0 +1,43 @@
+name: KodifChatExample
+options:
+  bundleIdPrefix: ai.kodif.chat
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+packages:
+  KodifChat:
+    path: ../..
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  KodifChatExample:
+    type: application
+    platform: iOS
+    scheme: {}
+    sources: [Sources]
+    dependencies:
+      - package: KodifChat
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Kodif Chat Example
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        # Voice mode (KodifChat.voiceEnabled): iOS terminates the app without this.
+        NSMicrophoneUsageDescription: Talk to our assistant in voice mode.
+        # Attachments.
+        NSCameraUsageDescription: Take a photo to send in the chat.
+        NSPhotoLibraryUsageDescription: Choose a photo to send in the chat.
+        # Set these in the build settings (or edit here) to point the example at your chat.
+        KodifIntegrationId: $(KODIF_INTEGRATION_ID)
+        KodifEnvironment: $(KODIF_ENVIRONMENT)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.kodif.chat.example
+        KODIF_INTEGRATION_ID: YOUR_INTEGRATION_ID
+        KODIF_ENVIRONMENT: development
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
