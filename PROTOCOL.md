@@ -60,7 +60,7 @@ Every message is a JSON object `{ "v": 1, "type": "...", ... }`. The widget post
 
 | Widget → native | fields | native does |
 |---|---|---|
-| `requestToken` | `id: string` (a random UUID) | Asks the app's token provider for the shopper's JWT and answers with `token`. |
+| `requestToken` | `id: string` (random) | Asks the app's token provider for the shopper's JWT and answers with `token`. |
 | `close` | | The shopper tapped close. Dismiss the chat. |
 | `reply` | | A reply finished. Native counts it as unread unless the chat is on screen with the app in the foreground. |
 | `openSettings` | | The microphone permission is denied. Open the app's settings page. |
