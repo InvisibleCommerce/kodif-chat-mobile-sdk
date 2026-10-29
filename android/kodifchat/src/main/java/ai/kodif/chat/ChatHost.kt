@@ -13,17 +13,15 @@ import android.util.Log
 import android.webkit.MimeTypeMap
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient.FileChooserParams
-import androidx.activity.result.ActivityResult
 import androidx.activity.result.ActivityResultCaller
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import java.io.File
-import java.io.IOException
 
 /**
- * What the session needs from the activity or fragment showing the chat: dismissing it, runtime permissions and the
- * file chooser. Create it in `onCreate` (activity result launchers must be registered before the host starts).
+ * What the session needs from the fragment showing the chat: dismissing it, runtime permissions and the file chooser.
+ * Create it in `onCreate` (activity result launchers must be registered before the host starts).
  */
 internal class ChatHost(
     caller: ActivityResultCaller,
@@ -31,18 +29,15 @@ internal class ChatHost(
     private val onDismiss: () -> Unit,
 ) {
     private var fileCallback: ValueCallback<Array<Uri>>? = null
-    private var cameraFile: File? = null
-    private var cameraUri: Uri? = null
+    private var photo: Pair<File, Uri>? = null
     private var permissionCallback: ((Boolean) -> Unit)? = null
 
     private val fileLauncher = caller.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        deliverFiles(it)
+        deliverFiles(if (it.resultCode == Activity.RESULT_OK) it.data ?: Intent() else null)
     }
 
     private val permissionLauncher = caller.registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-        val callback = permissionCallback
-        permissionCallback = null
-        callback?.invoke(it)
+        permissionCallback.also { permissionCallback = null }?.invoke(it)
     }
 
     val activity: Activity? get() = activityProvider()
@@ -51,14 +46,11 @@ internal class ChatHost(
 
     /** Asks for [permission] (one request at a time), answering [callback] with whether it was granted. */
     fun requestPermission(permission: String, callback: (Boolean) -> Unit) {
-        if (permissionCallback != null) {
-            callback(false)
-            return
-        }
+        if (permissionCallback != null) return callback(false)
         permissionCallback = callback
         try {
             permissionLauncher.launch(permission)
-        } catch (e: IllegalStateException) {
+        } catch (_: IllegalStateException) {
             permissionCallback = null
             callback(false)
         }
@@ -71,15 +63,13 @@ internal class ChatHost(
         fileCallback = callback
         val mimeTypes = mimeTypes(params)
         val multiple = params.mode == FileChooserParams.MODE_OPEN_MULTIPLE
-        val acceptsImages = mimeTypes.isEmpty() || mimeTypes.any { it == "*/*" || it.startsWith("image/") }
-        val canUseCamera = acceptsImages && activity.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+        val camera = (mimeTypes.isEmpty() || mimeTypes.any { it == "*/*" || it.startsWith("image/") }) &&
+            activity.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
         // An app that declares CAMERA must hold it before another app can capture for it; one that doesn't needs nothing.
-        if (canUseCamera && declaresCamera(activity) && !isGranted(activity, Manifest.permission.CAMERA)) {
-            requestPermission(Manifest.permission.CAMERA) { granted ->
-                launchChooser(activity, mimeTypes, multiple, withCamera = granted)
-            }
+        if (camera && declaresCamera(activity) && !isGranted(activity, Manifest.permission.CAMERA)) {
+            requestPermission(Manifest.permission.CAMERA) { launchChooser(activity, mimeTypes, multiple, withCamera = it) }
         } else {
-            launchChooser(activity, mimeTypes, multiple, withCamera = canUseCamera)
+            launchChooser(activity, mimeTypes, multiple, camera)
         }
         return true
     }
@@ -88,84 +78,64 @@ internal class ChatHost(
     fun cancelPending() {
         fileCallback?.onReceiveValue(null)
         fileCallback = null
-        val callback = permissionCallback
-        permissionCallback = null
-        callback?.invoke(false)
+        permissionCallback.also { permissionCallback = null }?.invoke(false)
     }
 
     private fun launchChooser(activity: Activity, mimeTypes: List<String>, multiple: Boolean, withCamera: Boolean) {
         if (fileCallback == null) return
-        val content = Intent(Intent.ACTION_GET_CONTENT)
-            .addCategory(Intent.CATEGORY_OPENABLE)
-            .setType("*/*")
+        val content = Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+            .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple)
         if (mimeTypes.isNotEmpty()) content.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.toTypedArray())
-        if (multiple) content.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-
         val chooser = Intent.createChooser(content, null)
         if (withCamera) cameraIntent(activity)?.let { chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(it)) }
         try {
             fileLauncher.launch(chooser)
         } catch (e: ActivityNotFoundException) {
-            Log.w(KodifChatSession.TAG, "No file chooser available", e)
+            Log.w("KodifChat", "No file chooser available", e)
             deliverFiles(null)
         }
     }
 
     private fun cameraIntent(context: Context): Intent? = try {
-        val directory = File(context.cacheDir, PHOTO_DIRECTORY).apply { mkdirs() }
-        val file = File.createTempFile("photo-", ".jpg", directory)
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}$AUTHORITY_SUFFIX", file)
-        cameraFile = file
-        cameraUri = uri
+        val file = File.createTempFile("photo-", ".jpg", File(context.cacheDir, "kodifchat").apply { mkdirs() })
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.kodifchat.fileprovider", file)
+        photo = file to uri
         Intent(MediaStore.ACTION_IMAGE_CAPTURE)
             .putExtra(MediaStore.EXTRA_OUTPUT, uri)
             .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
             .apply { clipData = ClipData.newRawUri(null, uri) }
-    } catch (e: IOException) {
-        Log.w(KodifChatSession.TAG, "Can't create a file for the camera", e)
-        null
-    } catch (e: IllegalArgumentException) {
-        Log.w(KodifChatSession.TAG, "The Kodif chat FileProvider is missing from the merged manifest", e)
+    } catch (e: Exception) { // IOException, or a FileProvider missing from the merged manifest
+        Log.w("KodifChat", "Can't offer the camera", e)
         null
     }
 
-    private fun deliverFiles(result: ActivityResult?) {
+    /** [data] is the chooser's result, or null when it was cancelled. */
+    private fun deliverFiles(data: Intent?) {
         val callback = fileCallback ?: return
         fileCallback = null
-        val photo = cameraFile
-        val photoUri = cameraUri
-        cameraFile = null
-        cameraUri = null
-
-        var uris: List<Uri> = emptyList()
-        if (result?.resultCode == Activity.RESULT_OK) {
-            uris = result.data?.let { urisFrom(it) }.orEmpty()
-            if (uris.isEmpty() && photo != null && photoUri != null && photo.length() > 0) uris = listOf(photoUri)
+        val (photoFile, photoUri) = photo.also { photo = null } ?: (null to null)
+        val clip = data?.clipData
+        var uris = when {
+            data == null -> emptyList()
+            clip != null -> (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri }
+            else -> listOfNotNull(data.data)
         }
-        if (photo != null && photoUri !in uris) photo.delete()
+        if (data != null && uris.isEmpty() && photoUri != null && (photoFile?.length() ?: 0) > 0) uris = listOf(photoUri)
+        if (photoUri !in uris) photoFile?.delete()
         callback.onReceiveValue(uris.takeIf { it.isNotEmpty() }?.toTypedArray())
     }
 
-    private fun urisFrom(data: Intent): List<Uri> {
-        val clip = data.clipData
-        if (clip != null && clip.itemCount > 0) return (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri }
-        return listOfNotNull(data.data)
-    }
-
     internal companion object {
-        const val PHOTO_DIRECTORY = "kodifchat"
-        const val AUTHORITY_SUFFIX = ".kodifchat.fileprovider"
+        /** Whether the app declares CAMERA. It can't change while the app runs, so it's read once. */
+        private var cameraDeclared: Boolean? = null
 
         fun isGranted(context: Context, permission: String): Boolean =
             ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
-        /** Whether the app's manifest declares CAMERA. It can't change while the app runs, so it's read once. */
-        private var cameraDeclared: Boolean? = null
-
         fun declaresCamera(context: Context): Boolean = cameraDeclared ?: try {
             @Suppress("DEPRECATION")
-            val info = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
-            info.requestedPermissions?.contains(Manifest.permission.CAMERA) == true
+            context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
+                .requestedPermissions?.contains(Manifest.permission.CAMERA) == true
         } catch (_: PackageManager.NameNotFoundException) {
             false
         }.also { cameraDeclared = it }
@@ -175,9 +145,7 @@ internal class ChatHost(
             .flatMap { it.split(',') }
             .map { it.trim().lowercase() }
             .filter { it.isNotEmpty() }
-            .mapNotNull { type ->
-                if (type.startsWith(".")) MimeTypeMap.getSingleton().getMimeTypeFromExtension(type.drop(1)) else type
-            }
+            .mapNotNull { if (it.startsWith(".")) MimeTypeMap.getSingleton().getMimeTypeFromExtension(it.drop(1)) else it }
             .distinct()
     }
 }

@@ -7,7 +7,7 @@ plugins {
 // JitPack builds tags and sets GROUP / VERSION; everywhere else the coordinates are ai.kodif:chat.
 val isJitPack = System.getenv("JITPACK") == "true"
 val publishGroup = if (isJitPack) System.getenv("GROUP") ?: "ai.kodif" else "ai.kodif"
-val publishArtifact = if (isJitPack) "kodif-chat-mobile" else "chat"
+val publishArtifact = if (isJitPack) "kodif-chat-mobile-sdk" else "chat"
 val publishVersion = System.getenv("VERSION").takeIf { isJitPack && !it.isNullOrBlank() }
     ?: property("VERSION_NAME").toString()
 
@@ -38,6 +38,11 @@ android {
         disable += setOf("GradleDependency", "NewerVersionAvailable", "AndroidGradlePluginVersion")
     }
 
+    testOptions {
+        // android.util.Log in unit tests.
+        unitTests.isReturnDefaultValues = true
+    }
+
     publishing {
         singleVariant("release") {
             withSourcesJar()
@@ -62,9 +67,10 @@ dependencies {
     api(libs.androidx.fragment)
     implementation(libs.androidx.core)
     implementation(libs.androidx.lifecycle.process)
-    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)
+    // The real org.json for JVM tests (android.jar only has stubs).
+    testImplementation(libs.org.json)
 
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.runner)
@@ -81,7 +87,7 @@ publishing {
             pom {
                 name.set("Kodif Chat")
                 description.set("The Kodif chat widget for Android apps.")
-                url.set("https://github.com/InvisibleCommerce/kodif-chat-mobile")
+                url.set("https://github.com/InvisibleCommerce/kodif-chat-mobile-sdk")
                 licenses {
                     license {
                         name.set("MIT")

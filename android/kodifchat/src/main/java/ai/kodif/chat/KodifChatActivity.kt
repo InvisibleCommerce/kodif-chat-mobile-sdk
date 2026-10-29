@@ -13,15 +13,10 @@ public class KodifChatActivity : AppCompatActivity() {
         val barStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.BLACK)
         enableEdgeToEdge(statusBarStyle = barStyle, navigationBarStyle = barStyle)
         super.onCreate(savedInstanceState)
-        if (KodifChat.configuration == null) {
-            // The process was recreated without the app configuring the chat first.
-            finish()
-            return
-        }
+        // The process was recreated without the app configuring the chat first.
+        if (KodifChat.configuration == null) return finish()
         if (savedInstanceState == null) {
-            supportFragmentManager.beginTransaction()
-                .replace(android.R.id.content, KodifChatFragment())
-                .commit()
+            supportFragmentManager.beginTransaction().replace(android.R.id.content, KodifChatFragment()).commit()
         }
     }
 }

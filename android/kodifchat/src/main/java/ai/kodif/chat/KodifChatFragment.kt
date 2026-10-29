@@ -6,6 +6,8 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.fragment.app.Fragment
 
 /**
@@ -23,10 +25,18 @@ public class KodifChatFragment : Fragment() {
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View =
-        FrameLayout(inflater.context).apply {
-            setBackgroundColor(Color.WHITE)
-            applyChatInsets()
-        }.also { this.container = it }
+        FrameLayout(inflater.context).also { frame ->
+            frame.setBackgroundColor(Color.WHITE)
+            // The page sees no insets (PROTOCOL.md, "Safe areas"): pad by the bars, cutout and keyboard here.
+            ViewCompat.setOnApplyWindowInsetsListener(frame) { view, insets ->
+                val types = WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or
+                    WindowInsetsCompat.Type.ime()
+                val padding = insets.getInsets(types)
+                view.setPadding(padding.left, padding.top, padding.right, padding.bottom)
+                WindowInsetsCompat.CONSUMED
+            }
+            this.container = frame
+        }
 
     override fun onStart() {
         super.onStart()

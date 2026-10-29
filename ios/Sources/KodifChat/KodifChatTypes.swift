@@ -9,7 +9,6 @@ extension KodifChat {
         /// Any bundle URL, for tests.
         case custom(bundleURL: URL)
 
-        /// The widget bundle for this environment.
         public var bundleURL: URL {
             switch self {
             case .production: return URL(string: "https://js.shippedsuite.com/api/chat-widget.js")!
@@ -18,12 +17,6 @@ extension KodifChat {
             case let .custom(bundleURL): return bundleURL
             }
         }
-    }
-
-    /// Who wrote a message.
-    public enum Author: String, Equatable, Sendable {
-        case ai
-        case agent
     }
 
     struct Configuration: Equatable {

@@ -1,113 +1,35 @@
-import os
 import SafariServices
 import UIKit
 import WebKit
 
-let kodifChatLog = Logger(subsystem: "ai.kodif.chat", category: "KodifChat")
-
-/// The one shared chat: the web view and its bridge (state in ``ChatPageState``). ``KodifChatViewController`` borrows
-/// its web view while it's on screen. A load that fails (the bundle doesn't load, no `ready` within
-/// ``readyTimeout``, the widget says `unavailable`) dismisses the chat and reports it; the next preload or
-/// presentation loads the page again.
+/// The one shared chat: a web view hosting the widget page, and the bridge. ``KodifChatViewController`` borrows the
+/// web view while it's on screen. The page buffers native → widget messages until the widget starts, so native sends
+/// whenever it likes. After `unavailable` or a web content process crash, the next preload or presentation reloads.
 @MainActor
 final class KodifChatSession: NSObject {
-    static let messageHandlerName = "kodifChat"
-    /// A load that hasn't heard `ready` by now has failed.
-    static let readyTimeout: TimeInterval = 15
-
     let configuration: KodifChat.Configuration
     private(set) var webView: WKWebView!
-    /// The view controller showing the chat, if any.
     private(set) weak var hostController: KodifChatViewController?
     /// Test hook: every message the widget posted, after decoding.
-    var onIncoming: ((BridgeMessage.Incoming) -> Void)?
+    var onIncoming: ((Bridge.Incoming) -> Void)?
 
-    private var state = ChatPageState()
-    private var isInvalidated = false
-    private var readyTimeoutTask: Task<Void, Never>?
+    private var needsReload = false
+    private var isVisible = false
+    private var isForeground = true
 
     init(configuration: KodifChat.Configuration) {
         self.configuration = configuration
         super.init()
-        webView = makeWebView()
-        let center = NotificationCenter.default
-        center.addObserver(
-            self, selector: #selector(didEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil
-        )
-        center.addObserver(
-            self, selector: #selector(willEnterForeground), name: UIApplication.willEnterForegroundNotification, object: nil
-        )
-        loadPage()
-    }
 
-    /// Tears the session down; it can't be used afterwards.
-    func invalidate() {
-        isInvalidated = true
-        cancelReadyTimeout()
-        NotificationCenter.default.removeObserver(self)
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: Self.messageHandlerName)
-        webView.navigationDelegate = nil
-        webView.uiDelegate = nil
-        webView.stopLoading()
-        webView.removeFromSuperview()
-        hostController?.dismissChat()
-        hostController = nil
-    }
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .default()
+        config.allowsInlineMediaPlayback = true
+        config.mediaTypesRequiringUserActionForPlayback = []
+        // Every new-window request is routed like a link (see createWebViewWith), so window.open needn't wait for a tap.
+        config.preferences.javaScriptCanOpenWindowsAutomatically = true
+        config.userContentController.add(WeakScriptMessageHandler(self), name: "kodifChat")
 
-    // MARK: Hosting
-
-    /// Hands the web view to `controller`, which is about to show it.
-    func attach(_ controller: KodifChatViewController) -> WKWebView {
-        hostController = controller
-        reloadIfFailed()
-        return webView
-    }
-
-    /// Loads the page again if the last load failed.
-    func reloadIfFailed() {
-        if state.isFailed { loadPage() }
-    }
-
-    /// Whether `controller`, if it's the one holding the chat, is on screen (see ``ChatPageState/reportsReplies``).
-    func setVisible(_ visible: Bool, from controller: KodifChatViewController) {
-        guard controller === hostController else { return }
-        state.setVisible(visible)
-    }
-
-    // MARK: Native → widget
-
-    /// Sends `message` to the widget now, or when it's ready (see ``ChatPageState/send(_:)``).
-    func send(_ message: BridgeMessage.Outgoing) {
-        deliver(state.send(message))
-    }
-
-    /// Delivers `messages` in one script, in order.
-    private func deliver(_ messages: [BridgeMessage.Outgoing]) {
-        guard !isInvalidated else { return }
-        let calls = messages.compactMap { message -> String? in
-            guard let json = message.json else {
-                kodifChatLog.error("Dropped a \(message.type, privacy: .public) message that couldn't be encoded as JSON")
-                return nil
-            }
-            return "window.KodifChatNative.receive(\(json))"
-        }
-        guard !calls.isEmpty else { return }
-        webView.evaluateJavaScript("if (window.KodifChatNative) { \(calls.joined(separator: ";")) }", completionHandler: nil)
-    }
-
-    // MARK: Page
-
-    private func makeWebView() -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
-        configuration.allowsInlineMediaPlayback = true
-        configuration.mediaTypesRequiringUserActionForPlayback = []
-        // Links leave the page only through navigation interception (decidePolicyFor / createWebViewWith). Every new
-        // window request is routed like a link and never opens a window, so window.open needn't wait for a tap.
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
-        configuration.userContentController.add(WeakScriptMessageHandler(self), name: Self.messageHandlerName)
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsLinkPreview = false
@@ -116,95 +38,97 @@ final class KodifChatSession: NSObject {
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.bounces = false
-        return webView
+
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(appStateChanged), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        center.addObserver(self, selector: #selector(appStateChanged), name: UIApplication.willEnterForegroundNotification, object: nil)
+        reload()
     }
 
-    private func loadPage() {
-        let loadID = state.startLoad()
-        let options = PageBuilder.Options(
+    func invalidate() {
+        NotificationCenter.default.removeObserver(self)
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "kodifChat")
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+        webView.removeFromSuperview()
+        hostController?.dismissChat()
+    }
+
+    func reload() {
+        needsReload = false
+        let html = Bridge.html(
+            bundleURL: configuration.environment.bundleURL,
             integrationId: configuration.integrationId,
             microphone: KodifChat.voiceEnabled,
             language: KodifChat.language
         )
-        let html = PageBuilder.html(bundleURL: configuration.environment.bundleURL, options: options)
-        webView.loadHTMLString(html, baseURL: PageBuilder.baseURL)
-
-        cancelReadyTimeout()
-        let timeout = UInt64(Self.readyTimeout * 1_000_000_000)
-        readyTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: timeout)
-            guard !Task.isCancelled, let self, !self.isInvalidated, self.state.loadTimedOut(loadID) else { return }
-            self.onLoadFailed()
-        }
+        webView.loadHTMLString(html, baseURL: Bridge.baseURL)
     }
 
-    private func cancelReadyTimeout() {
-        readyTimeoutTask?.cancel()
-        readyTimeoutTask = nil
+    func reloadIfNeeded() {
+        if needsReload { reload() }
     }
 
-    private func fail() {
-        if state.fail() { onLoadFailed() }
+    /// Hands the web view to `controller`, which is about to show it.
+    func attach(_ controller: KodifChatViewController) -> WKWebView {
+        hostController = controller
+        reloadIfNeeded()
+        return webView
     }
 
-    /// The load failed: unload the dead page, dismiss the chat, and tell the app. The next show reloads.
-    private func onLoadFailed() {
-        cancelReadyTimeout()
-        if let blank = URL(string: "about:blank") { webView.load(URLRequest(url: blank)) }
-        hostController?.dismissChat()
-        KodifChat.delegate?.kodifChatUnavailable()
+    func setVisible(_ visible: Bool, from controller: KodifChatViewController) {
+        guard controller === hostController else { return }
+        isVisible = visible
+        if visible { KodifChat.unreadCount = 0 }
+    }
+
+    func send(_ json: String) {
+        webView.evaluateJavaScript("window.KodifChatNative && window.KodifChatNative.receive(\(json))", completionHandler: nil)
+    }
+
+    func sendCustomContext() {
+        send(Bridge.customContext(KodifChat.customContext))
+    }
+
+    @objc private func appStateChanged(_ notification: Notification) {
+        isForeground = notification.name == UIApplication.willEnterForegroundNotification
+        send(Bridge.appState(foreground: isForeground))
+        if isForeground && isVisible { KodifChat.unreadCount = 0 }
     }
 
     // MARK: Widget → native
 
     fileprivate func receive(_ message: WKScriptMessage) {
-        guard !isInvalidated, message.webView === webView, message.frameInfo.isMainFrame else { return }
         let origin = message.frameInfo.securityOrigin
-        guard origin.protocol == "https", origin.host == PageBuilder.baseHost else { return }
-        guard let incoming = BridgeMessage.Incoming.decode(message.body) else { return }
-        handle(incoming)
-    }
+        guard message.webView === webView, message.frameInfo.isMainFrame,
+              origin.protocol == "https", origin.host == Bridge.baseHost,
+              let incoming = Bridge.decode(message.body)
+        else { return }
+        onIncoming?(incoming)
 
-    private func handle(_ message: BridgeMessage.Incoming) {
-        // A failed load's page is on its way out; nothing it says counts.
-        guard !state.isFailed else { return }
-        onIncoming?(message)
-        switch message {
-        case .ready:
-            cancelReadyTimeout()
-            deliver(state.ready(customContext: KodifChat.customContext))
+        switch incoming {
         case let .requestToken(id):
-            requestToken(id)
+            guard let provider = KodifChat.tokenProvider else {
+                send(Bridge.token(id: id, jwt: nil))
+                return
+            }
+            // The provider may call back on any thread.
+            provider { @Sendable [weak self] jwt in
+                Task { @MainActor [weak self] in self?.send(Bridge.token(id: id, jwt: jwt)) }
+            }
         case .close:
             hostController?.dismissChat()
             KodifChat.delegate?.kodifChatDidClose()
-        case let .message(preview, author):
-            // The widget posts every finished reply; the app only hears about the ones the shopper isn't watching.
-            if state.reportsReplies {
-                KodifChat.delegate?.kodifChat(didReceiveMessage: preview, author: author)
-            }
+        case .reply:
+            if !(isVisible && isForeground) { KodifChat.unreadCount += 1 }
         case .openSettings:
             if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
         case .unavailable:
             // Switched off for this store, or failed to start: start over the next time the chat is shown.
-            fail()
+            needsReload = true
+            hostController?.dismissChat()
+            KodifChat.delegate?.kodifChatUnavailable()
         }
-    }
-
-    private func requestToken(_ id: String) {
-        let loadID = state.tokenRequested(id)
-        guard let provider = KodifChat.tokenProvider else {
-            answerToken(id: id, jwt: nil, loadID: loadID)
-            return
-        }
-        // The provider may call back on any thread.
-        provider { @Sendable [weak self] jwt in
-            Task { @MainActor [weak self] in self?.answerToken(id: id, jwt: jwt, loadID: loadID) }
-        }
-    }
-
-    private func answerToken(id: String, jwt: String?, loadID: Int) {
-        deliver(state.tokenAnswered(id, jwt: jwt, loadID: loadID))
     }
 
     // MARK: Links
@@ -214,43 +138,27 @@ final class KodifChatSession: NSObject {
         if KodifChat.delegate?.kodifChat(openURL: url) == true { return }
         switch url.scheme?.lowercased() {
         case "http", "https":
-            guard let presenter = topViewController() else {
+            if let presenter = topViewController() {
+                presenter.present(SFSafariViewController(url: url), animated: true)
+            } else {
                 UIApplication.shared.open(url)
-                return
             }
-            presenter.present(SFSafariViewController(url: url), animated: true)
         case "mailto", "tel", "sms", "facetime", "facetime-audio":
             UIApplication.shared.open(url)
         default:
-            kodifChatLog.notice("Not opening a link with an unsupported scheme")
+            break
         }
     }
 
     private func topViewController() -> UIViewController? {
-        var top: UIViewController?
-        if let host = hostController, host.viewIfLoaded?.window != nil {
-            top = host
-        } else {
-            top = UIApplication.shared.connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .flatMap(\.windows)
-                .first(where: \.isKeyWindow)?
-                .rootViewController
-        }
+        var top: UIViewController? = hostController?.viewIfLoaded?.window != nil
+            ? hostController
+            : UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                .flatMap(\.windows).first(where: \.isKeyWindow)?.rootViewController
         while let presented = top?.presentedViewController, !presented.isBeingDismissed {
             top = presented
         }
         return top
-    }
-
-    // MARK: App state
-
-    @objc private func didEnterBackground() {
-        deliver(state.setForeground(false))
-    }
-
-    @objc private func willEnterForeground() {
-        deliver(state.setForeground(true))
     }
 }
 
@@ -262,36 +170,27 @@ extension KodifChatSession: WKNavigationDelegate {
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
-        // A new window (target=_blank / window.open) goes to webView(_:createWebViewWith:...); frames load freely.
-        guard let frame = navigationAction.targetFrame, frame.isMainFrame else {
+        // New windows go to createWebViewWith; frames load freely.
+        guard navigationAction.targetFrame?.isMainFrame == true, let url = navigationAction.request.url else {
             decisionHandler(.allow)
             return
         }
-        guard let url = navigationAction.request.url else {
-            decisionHandler(.cancel)
-            return
-        }
-        if Self.isPageLoad(url: url, navigationType: navigationAction.navigationType) {
-            decisionHandler(.allow)
-        } else {
-            decisionHandler(.cancel)
-            open(url)
-        }
+        let isPageLoad = url.scheme == "about"
+            || (url.host == Bridge.baseHost && (url.path.isEmpty || url.path == "/")
+                && navigationAction.navigationType != .linkActivated && navigationAction.navigationType != .formSubmitted)
+        decisionHandler(isPageLoad ? .allow : .cancel)
+        if !isPageLoad { open(url) }
     }
 
-    /// The page's own load (`loadHTMLString` with the base URL), as opposed to the shopper leaving it.
-    static func isPageLoad(url: URL, navigationType: WKNavigationType) -> Bool {
-        if url.scheme == "about" { return true }
-        guard url.scheme == "https", url.host == PageBuilder.baseHost, url.path.isEmpty || url.path == "/" else {
-            return false
-        }
-        return navigationType != .linkActivated && navigationType != .formSubmitted
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // A fresh page: tell it the current state (it buffers until the widget starts).
+        send(Bridge.appState(foreground: isForeground))
+        if KodifChat.customContext != nil { sendCustomContext() }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        guard !isInvalidated else { return }
-        kodifChatLog.notice("The web content process terminated; reloading the chat")
-        loadPage()
+        needsReload = true
+        if isVisible { reload() }
     }
 }
 
@@ -315,17 +214,13 @@ extension KodifChatSession: WKUIDelegate {
         type: WKMediaCaptureType,
         decisionHandler: @escaping (WKPermissionDecision) -> Void
     ) {
-        let allowed = KodifChat.voiceEnabled
-            && origin.protocol == "https"
-            && origin.host == PageBuilder.baseHost
-            && type == .microphone
+        let allowed = KodifChat.voiceEnabled && type == .microphone
+            && origin.protocol == "https" && origin.host == Bridge.baseHost
         decisionHandler(allowed ? .grant : .deny)
     }
 }
 
-// MARK: - WKScriptMessageHandler
-
-/// Breaks the retain cycle WKUserContentController → handler → web view.
+/// Breaks the retain cycle WKUserContentController → handler → session.
 @MainActor
 private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
     private weak var session: KodifChatSession?

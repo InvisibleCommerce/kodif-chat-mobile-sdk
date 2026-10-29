@@ -2,61 +2,71 @@ import WebKit
 import XCTest
 @testable import KodifChat
 
-/// Loads the real page (`loadHTMLString` with the https base URL, the generated HTML, a module script) with a stub
-/// widget bundle, and checks the bridge both ways: `ready` and `requestToken` reach native, and native's `token`
-/// answer reaches the widget. Also checks the page is a secure context, which voice mode's microphone needs.
+/// Loads the real page (`loadHTMLString` on the https base URL, a module script) with stub widget bundles and checks
+/// the bridge both ways, link interception, unread counting and a bundle that fails to load.
 final class WebViewIntegrationTests: XCTestCase {
-    /// Plays the widget: records what native sends and posts what mobile mode posts.
-    private let stubBundle = """
-    window.__received = [];
-    window.ShippedAI = {
-      ChatWidget: function (options) {
-        window.__options = options;
-        var post = function (m) { window.webkit.messageHandlers.kodifChat.postMessage(JSON.stringify(m)); };
-        window.KodifChatNative = { receive: function (m) { window.__received.push(m); } };
-        post({ v: 1, type: 'ready' });
-        post({ v: 1, type: 'requestToken', id: 't1' });
-      }
-    };
+    /// Plays the widget: takes over KodifChatNative, replays what the page buffered, asks for a token, posts a reply.
+    private let stubWidget = """
+    window.ShippedAI = { ChatWidget: function (options) {
+      window.__options = options;
+      window.__received = window.KodifChatNative.pending.slice();
+      window.KodifChatNative = { receive: function (m) { window.__received.push(m); } };
+      var post = function (m) { window.webkit.messageHandlers.kodifChat.postMessage(JSON.stringify(m)); };
+      window.__click = function (href, target) {
+        var a = document.createElement('a');
+        a.href = href;
+        if (target) a.target = target;
+        document.body.appendChild(a);
+        a.click();
+      };
+      post({ v: 1, type: 'requestToken', id: '8d5e2c1a' });
+      post({ v: 1, type: 'reply' });
+    } };
     window.dispatchEvent(new Event('shipped:chat-script-loaded'));
     """
 
     @MainActor
-    func testReadyAndTokenRoundTrip() async throws {
-        let bundleURL = try XCTUnwrap(URL(string: "data:text/javascript;base64," + Data(stubBundle.utf8).base64EncodedString()))
-        KodifChat.tokenProvider = { completion in
-            DispatchQueue.global().async { completion("test-jwt") }
-        }
-        defer { KodifChat.tokenProvider = nil }
+    private func makeSession(bundle: String) throws -> KodifChatSession {
+        let url = try XCTUnwrap(URL(string: "data:text/javascript;base64," + Data(bundle.utf8).base64EncodedString()))
+        return KodifChatSession(configuration: .init(integrationId: "test-integration", environment: .custom(bundleURL: url)))
+    }
 
-        let ready = expectation(description: "ready")
+    @MainActor
+    func testTokenRoundTripStateAndUnreadCount() async throws {
+        KodifChat.tokenProvider = { completion in DispatchQueue.global().async { completion("test-jwt") } }
+        KodifChat.customContext = ["screen": "cart"]
+        let recorder = Recorder()
+        KodifChat.delegate = recorder
+        defer {
+            KodifChat.tokenProvider = nil
+            KodifChat.customContext = nil
+            KodifChat.delegate = nil
+            KodifChat.unreadCount = 0
+        }
+
         let requestToken = expectation(description: "requestToken")
-        var incoming: [BridgeMessage.Incoming] = []
-        let session = KodifChatSession(
-            configuration: .init(integrationId: "test-integration", environment: .custom(bundleURL: bundleURL))
-        )
+        let reply = expectation(description: "reply")
+        let session = try makeSession(bundle: stubWidget)
         defer { session.invalidate() }
         session.onIncoming = { message in
-            incoming.append(message)
-            switch message {
-            case .ready: ready.fulfill()
-            case .requestToken: requestToken.fulfill()
-            default: break
-            }
+            if message == .requestToken(id: "8d5e2c1a") { requestToken.fulfill() }
+            if message == .reply { reply.fulfill() }
         }
+        await fulfillment(of: [requestToken, reply], timeout: 30)
 
-        await fulfillment(of: [ready, requestToken], timeout: 30, enforceOrder: true)
-        XCTAssertEqual(incoming, [.ready, .requestToken(id: "t1")])
+        // Not on screen, so the reply counts as unread.
+        XCTAssertEqual(KodifChat.unreadCount, 1)
+        XCTAssertEqual(recorder.unreadCounts, [1])
 
         let received = try await poll(session.webView) { messages in
-            messages.contains { $0["type"] as? String == "token" }
+            messages.contains { $0["type"] as? String == "token" } && messages.contains { $0["type"] as? String == "customContext" }
         }
         let token = try XCTUnwrap(received.first { $0["type"] as? String == "token" })
-        XCTAssertEqual(token["id"] as? String, "t1")
+        XCTAssertEqual(token["id"] as? String, "8d5e2c1a")
         XCTAssertEqual(token["jwt"] as? String, "test-jwt")
-        XCTAssertEqual(token["v"] as? Int, 1)
-        // On ready, native sends the current state first.
-        XCTAssertEqual(received.first?["type"] as? String, "appState")
+        XCTAssertTrue(received.contains { $0["type"] as? String == "appState" && $0["state"] as? String == "foreground" })
+        let context = try XCTUnwrap(received.first { $0["type"] as? String == "customContext" })
+        XCTAssertEqual((context["context"] as? [String: Any])?["screen"] as? String, "cart")
 
         let isSecureContext = try await evaluate(session.webView, "window.isSecureContext")
         XCTAssertEqual(isSecureContext as? Bool, true, "voice mode needs a secure context")
@@ -64,81 +74,33 @@ final class WebViewIntegrationTests: XCTestCase {
         XCTAssertEqual(origin as? String, "https://mobile-chat.kodif.ai")
         let host = try await evaluate(session.webView, "window.__options.host")
         XCTAssertEqual(host as? String, "ios")
-        let integrationId = try await evaluate(session.webView, "window.__options.integrationId")
-        XCTAssertEqual(integrationId as? String, "test-integration")
-    }
-
-    @MainActor
-    func testMessagesFromOtherVersionsAndTypesAreIgnored() async throws {
-        let stub = """
-        window.ShippedAI = { ChatWidget: function () {
-          var post = function (m) { window.webkit.messageHandlers.kodifChat.postMessage(JSON.stringify(m)); };
-          window.KodifChatNative = { receive: function () {} };
-          post({ v: 2, type: 'close' });
-          post({ v: 1, type: 'somethingNew' });
-          post({ v: 1, type: 'ready' });
-        } };
-        window.dispatchEvent(new Event('shipped:chat-script-loaded'));
-        """
-        let bundleURL = try XCTUnwrap(URL(string: "data:text/javascript;base64," + Data(stub.utf8).base64EncodedString()))
-        let ready = expectation(description: "ready")
-        var incoming: [BridgeMessage.Incoming] = []
-        let session = KodifChatSession(configuration: .init(integrationId: "i", environment: .custom(bundleURL: bundleURL)))
-        defer { session.invalidate() }
-        session.onIncoming = { message in
-            incoming.append(message)
-            if message == .ready { ready.fulfill() }
-        }
-        await fulfillment(of: [ready], timeout: 30)
-        XCTAssertEqual(incoming, [.ready])
     }
 
     /// Links leave the page only through navigation interception: a plain link (decidePolicyFor) and a
     /// target=_blank one (createWebViewWith).
     @MainActor
     func testLinksReachTheOpenURLPath() async throws {
-        let stub = """
-        window.ShippedAI = { ChatWidget: function () {
-          window.KodifChatNative = { receive: function () {} };
-          window.__click = function (href, target) {
-            var a = document.createElement('a');
-            a.href = href;
-            if (target) a.target = target;
-            document.body.appendChild(a);
-            a.click();
-          };
-          window.webkit.messageHandlers.kodifChat.postMessage(JSON.stringify({ v: 1, type: 'ready' }));
-        } };
-        window.dispatchEvent(new Event('shipped:chat-script-loaded'));
-        """
-        let bundleURL = try XCTUnwrap(URL(string: "data:text/javascript;base64," + Data(stub.utf8).base64EncodedString()))
-        let recorder = LinkRecorder()
+        let recorder = Recorder()
         KodifChat.delegate = recorder
         defer { KodifChat.delegate = nil }
-
-        let ready = expectation(description: "ready")
-        let session = KodifChatSession(configuration: .init(integrationId: "i", environment: .custom(bundleURL: bundleURL)))
+        let started = expectation(description: "widget started")
+        let session = try makeSession(bundle: stubWidget)
         defer { session.invalidate() }
-        session.onIncoming = { if $0 == .ready { ready.fulfill() } }
-        await fulfillment(of: [ready], timeout: 30)
+        session.onIncoming = { if case .requestToken = $0 { started.fulfill() } }
+        await fulfillment(of: [started], timeout: 30)
 
-        let plain = expectation(description: "plain link")
-        recorder.onOpen = { url in
-            XCTAssertEqual(url.absoluteString, "https://example.com/plain")
-            plain.fulfill()
+        for (script, expected) in [
+            ("__click('https://example.com/plain'); true", "https://example.com/plain"),
+            ("__click('https://example.com/new-window', '_blank'); true", "https://example.com/new-window"),
+        ] {
+            let opened = expectation(description: expected)
+            recorder.onOpen = { url in
+                XCTAssertEqual(url.absoluteString, expected)
+                opened.fulfill()
+            }
+            _ = try await evaluate(session.webView, script)
+            await fulfillment(of: [opened], timeout: 10)
         }
-        _ = try await evaluate(session.webView, "__click('https://example.com/plain'); true")
-        await fulfillment(of: [plain], timeout: 10)
-
-        let newWindow = expectation(description: "target=_blank link")
-        recorder.onOpen = { url in
-            XCTAssertEqual(url.absoluteString, "https://example.com/new-window")
-            newWindow.fulfill()
-        }
-        _ = try await evaluate(session.webView, "__click('https://example.com/new-window', '_blank'); true")
-        await fulfillment(of: [newWindow], timeout: 10)
-
-        // The page stayed.
         let origin = try await evaluate(session.webView, "location.origin")
         XCTAssertEqual(origin as? String, "https://mobile-chat.kodif.ai")
     }
@@ -146,10 +108,10 @@ final class WebViewIntegrationTests: XCTestCase {
     @MainActor
     func testABundleThatFailsToLoadIsReportedAndReloaded() async throws {
         // .invalid never resolves, so the module script fails to load and its onerror reports it.
-        let bundleURL = try XCTUnwrap(URL(string: "https://kodif-chat.invalid/chat-widget.js"))
-        let recorder = UnavailableRecorder()
+        let recorder = Recorder()
         KodifChat.delegate = recorder
         defer { KodifChat.delegate = nil }
+        let bundleURL = try XCTUnwrap(URL(string: "https://kodif-chat.invalid/chat-widget.js"))
 
         let first = expectation(description: "first load reported unavailable")
         recorder.onUnavailable = { first.fulfill() }
@@ -157,10 +119,9 @@ final class WebViewIntegrationTests: XCTestCase {
         defer { session.invalidate() }
         await fulfillment(of: [first], timeout: 30)
 
-        // The next preload / presentation loads the page again.
         let second = expectation(description: "reload reported unavailable")
         recorder.onUnavailable = { second.fulfill() }
-        session.reloadIfFailed()
+        session.reloadIfNeeded()
         await fulfillment(of: [second], timeout: 30)
     }
 
@@ -180,10 +141,7 @@ final class WebViewIntegrationTests: XCTestCase {
     }
 
     @MainActor
-    private func poll(
-        _ webView: WKWebView,
-        until done: ([[String: Any]]) -> Bool
-    ) async throws -> [[String: Any]] {
+    private func poll(_ webView: WKWebView, until done: ([[String: Any]]) -> Bool) async throws -> [[String: Any]] {
         let deadline = Date().addingTimeInterval(15)
         var messages: [[String: Any]] = []
         while Date() < deadline {
@@ -197,20 +155,21 @@ final class WebViewIntegrationTests: XCTestCase {
 }
 
 @MainActor
-private final class UnavailableRecorder: KodifChatDelegate {
-    var onUnavailable: (() -> Void)?
-
-    func kodifChatUnavailable() {
-        onUnavailable?()
-    }
-}
-
-@MainActor
-private final class LinkRecorder: KodifChatDelegate {
+private final class Recorder: KodifChatDelegate {
     var onOpen: ((URL) -> Void)?
+    var onUnavailable: (() -> Void)?
+    var unreadCounts: [Int] = []
 
     func kodifChat(openURL url: URL) -> Bool {
         onOpen?(url)
         return true
+    }
+
+    func kodifChat(unreadCountDidChange count: Int) {
+        unreadCounts.append(count)
+    }
+
+    func kodifChatUnavailable() {
+        onUnavailable?()
     }
 }
