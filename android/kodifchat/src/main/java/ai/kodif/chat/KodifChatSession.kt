@@ -263,22 +263,22 @@ internal class KodifChatSession(
     }
 
     private fun requestToken(id: String) {
-        state.tokenRequested(id)
+        val loadId = state.tokenRequested(id)
         val provider = KodifChat.tokenProvider
         if (provider == null) {
-            answerToken(id, null)
+            answerToken(id, null, loadId)
             return
         }
         try {
-            provider.fetchToken { jwt -> KodifChat.onMain { answerToken(id, jwt) } }
+            provider.fetchToken { jwt -> KodifChat.onMain { answerToken(id, jwt, loadId) } }
         } catch (e: RuntimeException) {
             Log.w(TAG, "The token provider threw; continuing anonymous", e)
-            answerToken(id, null)
+            answerToken(id, null, loadId)
         }
     }
 
-    private fun answerToken(id: String, jwt: String?) {
-        if (!isDestroyed) deliver(state.tokenAnswered(id, jwt))
+    private fun answerToken(id: String, jwt: String?, loadId: Int) {
+        if (!isDestroyed) deliver(state.tokenAnswered(id, jwt, loadId))
     }
 
     private fun openUrl(url: String) {

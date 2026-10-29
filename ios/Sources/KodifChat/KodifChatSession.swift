@@ -185,19 +185,19 @@ final class KodifChatSession: NSObject {
     }
 
     private func requestToken(_ id: String) {
-        state.tokenRequested(id)
+        let loadID = state.tokenRequested(id)
         guard let provider = KodifChat.tokenProvider else {
-            answerToken(id: id, jwt: nil)
+            answerToken(id: id, jwt: nil, loadID: loadID)
             return
         }
         // The provider may call back on any thread.
         provider { @Sendable jwt in
-            Task { @MainActor in self.answerToken(id: id, jwt: jwt) }
+            Task { @MainActor in self.answerToken(id: id, jwt: jwt, loadID: loadID) }
         }
     }
 
-    private func answerToken(id: String, jwt: String?) {
-        deliver(state.tokenAnswered(id, jwt: jwt))
+    private func answerToken(id: String, jwt: String?, loadID: Int) {
+        deliver(state.tokenAnswered(id, jwt: jwt, loadID: loadID))
     }
 
     // MARK: Links

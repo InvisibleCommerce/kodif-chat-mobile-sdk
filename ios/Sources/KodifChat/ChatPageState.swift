@@ -56,13 +56,18 @@ struct ChatPageState {
         return send(.appState(foreground: foreground))
     }
 
-    mutating func tokenRequested(_ id: String) {
+    /// The widget asked for a token. Returns the load it belongs to: pass it to ``tokenAnswered(_:jwt:loadID:)``,
+    /// because the widget's request ids start over on every load.
+    mutating func tokenRequested(_ id: String) -> Int {
         pendingTokenIDs.insert(id)
+        return loadID
     }
 
-    /// Answers a pending `requestToken`; a stale id (reloaded page, provider calling back twice) gets nothing.
-    mutating func tokenAnswered(_ id: String, jwt: String?) -> [BridgeMessage.Outgoing] {
-        guard pendingTokenIDs.remove(id) != nil else { return [] }
+    /// Answers request `id` of load `loadID`. An answer for an earlier load (a slow provider calling back after a
+    /// reload) is dropped without touching the current load's requests, and a provider calling back twice is answered
+    /// once.
+    mutating func tokenAnswered(_ id: String, jwt: String?, loadID: Int) -> [BridgeMessage.Outgoing] {
+        guard loadID == self.loadID, pendingTokenIDs.remove(id) != nil else { return [] }
         return send(.token(id: id, jwt: jwt))
     }
 

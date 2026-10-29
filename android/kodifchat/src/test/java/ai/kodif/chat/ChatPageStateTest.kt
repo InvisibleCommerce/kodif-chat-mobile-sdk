@@ -43,20 +43,38 @@ class ChatPageStateTest {
         val state = ChatPageState()
         state.startLoad()
         state.ready(null)
-        state.tokenRequested("t1")
-        assertEquals(listOf(Outgoing.Token("t1", "jwt")), state.tokenAnswered("t1", "jwt"))
-        assertEquals(emptyList<Outgoing>(), state.tokenAnswered("t1", "jwt"))
-        assertEquals(emptyList<Outgoing>(), state.tokenAnswered("unknown", null))
+        val load = state.tokenRequested("t1")
+        assertEquals(listOf(Outgoing.Token("t1", "jwt")), state.tokenAnswered("t1", "jwt", load))
+        assertEquals(emptyList<Outgoing>(), state.tokenAnswered("t1", "jwt", load))
+        assertEquals(emptyList<Outgoing>(), state.tokenAnswered("unknown", null, load))
+    }
+
+    @Test
+    fun anEarlierLoadsTokenAnswerCannotAnswerTheSameIdOnTheNextLoad() {
+        val state = ChatPageState()
+        state.startLoad()
+        state.ready(null)
+        val firstLoad = state.tokenRequested("1")
+
+        // Reload: the widget's request ids start over.
+        state.startLoad()
+        state.ready(null)
+        val secondLoad = state.tokenRequested("1")
+
+        // The first load's slow provider calls back: dropped, and the second load's request stays pending.
+        assertEquals(emptyList<Outgoing>(), state.tokenAnswered("1", "old-shopper", firstLoad))
+        assertEquals(listOf(Outgoing.Token("1", "new-shopper")), state.tokenAnswered("1", "new-shopper", secondLoad))
+        assertEquals(emptyList<Outgoing>(), state.tokenAnswered("1", "new-shopper", secondLoad))
     }
 
     @Test
     fun aReloadForgetsPendingRequestsAndQueuedMessages() {
         val state = ChatPageState()
-        state.startLoad()
+        val first = state.startLoad()
         state.tokenRequested("t1")
         state.send(Outgoing.Token(null, "jwt"))
         state.startLoad()
-        assertEquals(emptyList<Outgoing>(), state.tokenAnswered("t1", "jwt"))
+        assertEquals(emptyList<Outgoing>(), state.tokenAnswered("t1", "jwt", first))
         assertEquals(listOf(Outgoing.Visibility(false), Outgoing.AppState(true)), state.ready(null))
     }
 

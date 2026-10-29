@@ -41,19 +41,39 @@ final class ChatPageStateTests: XCTestCase {
         var state = ChatPageState()
         _ = state.startLoad()
         _ = state.ready(customContext: nil)
-        state.tokenRequested("t1")
-        XCTAssertEqual(json(state.tokenAnswered("t1", jwt: "jwt")), json(.token(id: "t1", jwt: "jwt")))
-        XCTAssertTrue(state.tokenAnswered("t1", jwt: "jwt").isEmpty)
-        XCTAssertTrue(state.tokenAnswered("unknown", jwt: nil).isEmpty)
+        let load = state.tokenRequested("t1")
+        XCTAssertEqual(json(state.tokenAnswered("t1", jwt: "jwt", loadID: load)), json(.token(id: "t1", jwt: "jwt")))
+        XCTAssertTrue(state.tokenAnswered("t1", jwt: "jwt", loadID: load).isEmpty)
+        XCTAssertTrue(state.tokenAnswered("unknown", jwt: nil, loadID: load).isEmpty)
+    }
+
+    func testAnEarlierLoadsTokenAnswerCannotAnswerTheSameIdOnTheNextLoad() {
+        var state = ChatPageState()
+        _ = state.startLoad()
+        _ = state.ready(customContext: nil)
+        let firstLoad = state.tokenRequested("1")
+
+        // Reload: the widget's request ids start over.
+        _ = state.startLoad()
+        _ = state.ready(customContext: nil)
+        let secondLoad = state.tokenRequested("1")
+
+        // The first load's slow provider calls back: dropped, and the second load's request stays pending.
+        XCTAssertTrue(state.tokenAnswered("1", jwt: "old-shopper", loadID: firstLoad).isEmpty)
+        XCTAssertEqual(
+            json(state.tokenAnswered("1", jwt: "new-shopper", loadID: secondLoad)),
+            json(.token(id: "1", jwt: "new-shopper"))
+        )
+        XCTAssertTrue(state.tokenAnswered("1", jwt: "new-shopper", loadID: secondLoad).isEmpty)
     }
 
     func testAReloadForgetsPendingRequestsAndQueuedMessages() {
         var state = ChatPageState()
-        _ = state.startLoad()
-        state.tokenRequested("t1")
+        let first = state.startLoad()
+        _ = state.tokenRequested("t1")
         _ = state.send(.token(id: nil, jwt: "jwt"))
         _ = state.startLoad()
-        XCTAssertTrue(state.tokenAnswered("t1", jwt: "jwt").isEmpty)
+        XCTAssertTrue(state.tokenAnswered("t1", jwt: "jwt", loadID: first).isEmpty)
         XCTAssertEqual(json(state.ready(customContext: nil)), json(.visibility(false), .appState(foreground: true)))
     }
 

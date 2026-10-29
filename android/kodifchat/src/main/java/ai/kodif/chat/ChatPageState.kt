@@ -72,13 +72,22 @@ internal class ChatPageState {
         return send(Outgoing.AppState(foreground))
     }
 
-    fun tokenRequested(id: String) {
+    /**
+     * The widget asked for a token. Returns the load it belongs to: pass it to [tokenAnswered], because the widget's
+     * request ids start over on every load.
+     */
+    fun tokenRequested(id: String): Int {
         pendingTokenIds += id
+        return loadId
     }
 
-    /** Answers a pending `requestToken`; a stale id (reloaded page, provider calling back twice) gets nothing. */
-    fun tokenAnswered(id: String, jwt: String?): List<Outgoing> =
-        if (pendingTokenIds.remove(id)) send(Outgoing.Token(id, jwt)) else emptyList()
+    /**
+     * Answers request [id] of load [loadId]. An answer for an earlier load (a slow provider calling back after a
+     * reload) is dropped without touching the current load's requests, and a provider calling back twice is answered
+     * once.
+     */
+    fun tokenAnswered(id: String, jwt: String?, loadId: Int): List<Outgoing> =
+        if (loadId == this.loadId && pendingTokenIds.remove(id)) send(Outgoing.Token(id, jwt)) else emptyList()
 
     /** Marks the load failed. True if it wasn't already, i.e. the caller should tear down and report it. */
     fun fail(): Boolean {
