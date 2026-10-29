@@ -168,7 +168,8 @@ final class WebViewIntegrationTests: XCTestCase {
         }
         _ = try? await evaluate(session.webView, Bridge.bundleErrorHandler + "; true")
         _ = await XCTWaiter().fulfillment(of: [reported], timeout: 5)
-        return "readyState=\(String(describing: try? await evaluate(session.webView, "document.readyState"))) "
+        let readyState = try? await evaluate(session.webView, "document.readyState")
+        return "readyState=\(String(describing: readyState)) "
             + "probe=\(String(describing: probed)) onerror attribute=\(String(describing: attribute)) "
             + "handler reaches native when called directly: \(direct)"
     }
