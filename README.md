@@ -9,6 +9,29 @@ sign-in, links, voice mode, attachments, and unread-reply notifications.
 
 You need the **integration id** of your web chat channel (in your Kodif dashboard's web chat settings).
 
+## Shopper tokens
+
+Without a token the chat is anonymous. To connect it to a signed-in shopper's account, the app gives the chat a JWT
+for them, which **your backend** issues:
+
+- Your backend signs the JWT with **your own private key**, using RS256 (an RSA key of 2048 bits or more) or ES256
+  (a P-256 key). The private key never leaves your servers, and the app never signs or mints tokens itself.
+- On the **Custom Authentication** tab of your web chat settings, give Kodif the matching **public key**: paste it
+  as a PEM, or enter an HTTPS **JWKS URL** that Kodif fetches. With a JWKS URL the key is chosen by the token's
+  `kid`, so you can rotate keys.
+- The token carries the shopper's id in the **identity claim** you set on that tab (`identity` by default; `sub` or
+  `email` are common), and an **`exp`**. Keep tokens short-lived (minutes): the app fetches a new one whenever the
+  chat asks. An `exp` is always checked when present, and the tab can require every token to have one.
+- Optionally, set an **audience** and/or **issuer** on the tab: tokens must then carry a matching `aud` / `iss`.
+- A token that's missing, expired or fails verification doesn't sign anyone in: the chat carries on as an anonymous
+  shopper.
+
+In the app, the **token provider** fetches the current shopper's token from your backend when the chat asks for one
+(when it starts, and again when a token expires). When the shopper signs in or out while the chat is running,
+`setShopperToken` tells the chat right away: a JWT signs the chat in with that token directly, and `nil` / `null`
+starts a fresh anonymous shopper (the previous shopper's conversations are no longer reachable on the device). Keep
+the token provider in step with the shopper's state too, since it answers every request the chat makes.
+
 ## iOS
 
 ### Install
@@ -59,25 +82,21 @@ dismisses itself.
 
 ### Signed-in shoppers
 
-To connect the chat to the shopper's account, give the SDK a JWT for them, signed on **your backend** with the
-secret from **the Custom Authentication tab of your web chat settings**. Never ship that secret in the app.
+Fetch the shopper's token from your backend (see [Shopper tokens](#shopper-tokens)):
 
 ```swift
 KodifChat.tokenProvider = { completion in
-    // Call completion from any thread: a JWT for a signed-in shopper, nil for an anonymous one.
+    // Call completion from any thread: a JWT from your backend for a signed-in shopper, nil for an anonymous one.
     MyBackend.fetchChatToken { jwt in completion(jwt) }
 }
 ```
 
-The chat asks for a token when it starts and again when one expires. When the shopper signs in or out while the chat
-is running, tell it:
+When the shopper signs in or out while the chat is running, tell it:
 
 ```swift
-KodifChat.setShopperToken(jwt) // after sign-in
-KodifChat.setShopperToken(nil) // after sign-out
+KodifChat.setShopperToken(jwt) // after sign-in: the chat signs in with this token
+KodifChat.setShopperToken(nil) // after sign-out: a fresh anonymous shopper
 ```
-
-Keep `tokenProvider` in step with the shopper's state too: it answers every request the chat makes.
 
 ### Voice mode
 
@@ -112,7 +131,8 @@ final class ChatEvents: KodifChatDelegate {
     // A reply arrived while the chat wasn't on screen: show a badge.
     func kodifChat(didReceiveMessage preview: String, author: KodifChat.Author) {}
 
-    // The chat is switched off for your store, or failed to start. It has been dismissed.
+    // The chat is switched off for your store, or failed to start (e.g. offline). It has been dismissed;
+    // the next preload or presentation tries again.
     func kodifChatUnavailable() {}
 }
 
@@ -125,7 +145,7 @@ Every method is optional.
 
 ```swift
 KodifChat.language = "fr"                                  // otherwise the chat detects it
-KodifChat.customContext = ["screen": "product", "sku": "123"] // attached to the conversation; updates a running chat
+KodifChat.customContext = ["screen": "product", "sku": "123"] // attached to the conversation; replaces it (nil clears)
 KodifChat.configure(integrationId: "…", environment: .staging) // .production (default), .staging, .development
 ```
 
@@ -170,17 +190,16 @@ remove it in `KodifChatListener.onClose`.
 
 ### Signed-in shoppers
 
-Sign a JWT for the shopper on **your backend** with the secret from **the Custom Authentication tab of your web chat
-settings** (never ship that secret in the app), and provide it:
+Fetch the shopper's token from your backend (see [Shopper tokens](#shopper-tokens)):
 
 ```kotlin
 KodifChat.tokenProvider = TokenProvider { callback ->
-    // From any thread: a JWT for a signed-in shopper, null for an anonymous one.
+    // From any thread: a JWT from your backend for a signed-in shopper, null for an anonymous one.
     myBackend.fetchChatToken { jwt -> callback(jwt) }
 }
 
-KodifChat.setShopperToken(jwt)  // after sign-in, while the chat is running
-KodifChat.setShopperToken(null) // after sign-out
+KodifChat.setShopperToken(jwt)  // after sign-in, while the chat is running: the chat signs in with this token
+KodifChat.setShopperToken(null) // after sign-out: a fresh anonymous shopper
 ```
 
 ### Voice mode
@@ -213,7 +232,7 @@ KodifChat.listener = object : KodifChatListener {
     override fun onOpenUrl(url: String): Boolean = false // true if you handled it; false opens a Custom Tab
     override fun onClose() {}
     override fun onMessage(preview: String, author: KodifChat.Author) {} // a reply arrived while the chat was hidden
-    override fun onUnavailable() {} // switched off for your store, or failed to start
+    override fun onUnavailable() {} // switched off for your store, or failed to start (e.g. offline); dismissed
 }
 ```
 
@@ -223,7 +242,7 @@ Every method is optional. The listener is held strongly: set it to null when its
 
 ```kotlin
 KodifChat.language = "fr"
-KodifChat.customContext = mapOf("screen" to "product", "sku" to "123")
+KodifChat.customContext = mapOf("screen" to "product", "sku" to "123") // replaces the context (null clears it)
 KodifChat.configure(context, "…", KodifChat.Environment.Staging) // Production (default), Staging, Development
 ```
 
@@ -231,6 +250,8 @@ KodifChat.configure(context, "…", KodifChat.Environment.Staging) // Production
 
 The SDK keeps one web view for the chat, loads a small page that starts the Kodif chat widget in mobile mode, and
 reuses it every time the chat opens, so a conversation (and a voice call) survives closing and reopening the chat.
+If the chat can't start (the widget doesn't load, e.g. offline, or doesn't come up within 15 seconds), the SDK
+dismisses it and reports it as unavailable, and the next preload or open loads it again.
 The widget and the native code talk through a small, versioned message protocol: see [PROTOCOL.md](PROTOCOL.md).
 
 ## Development
