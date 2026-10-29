@@ -16,15 +16,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The runner's default Xcode, with whichever iPhone simulator it has installed (names change between images).
-      - name: Pick an iPhone simulator
+      # The runner's default Xcode, with an iPhone simulator on the runtime that matches its SDK (names change between
+      # images). A newer runtime than the SDK runs WebKit very slowly: its processes took over a minute to launch.
+      - name: Pick and boot an iPhone simulator
         id: simulator
         run: |
-          udid=$(xcrun simctl list devices available -j | python3 -c 'import json, sys
-          devices = json.load(sys.stdin)["devices"]
-          print(next(d["udid"] for runtime, ds in sorted(devices.items(), reverse=True) if "iOS" in runtime
-                     for d in ds if d["name"].startswith("iPhone")))')
+          sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          echo "iOS Simulator SDK $sdk"
+          udid=$(SDK="$sdk" python3 -c 'import json, os, subprocess
+          devices = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))["devices"]
+          sdk = os.environ["SDK"].replace(".", "-")
+          runtimes = sorted((r for r in devices if ".iOS-" in r), key=lambda r: [int(p) for p in r.split(".iOS-")[1].split("-")])
+          matching = [r for r in runtimes if r.endswith(".iOS-" + sdk)] or [r for r in runtimes if r.split(".iOS-")[1].split("-")[0] == sdk.split("-")[0]] or runtimes
+          print(next(d["udid"] for r in reversed(matching) for d in devices[r] if d["name"].startswith("iPhone")))')
+          xcrun simctl list devices | grep "$udid"
           echo "udid=$udid" >> "$GITHUB_OUTPUT"
+          # Boot before the tests, so the simulator's first-boot work isn't charged to the first WKWebView test.
+          xcrun simctl boot "$udid" || true
+          xcrun simctl bootstatus "$udid" -b
 
       - name: Test KodifChat
         run: |
