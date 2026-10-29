@@ -80,13 +80,21 @@ origin).
 | `ready` | | The widget's bridge is listening. Flush the queued native → widget messages. |
 | `requestToken` | `id: string` | Ask the app's token provider for a shopper JWT, then answer with `token` and the same `id`. Sent at start, and again when the API rejects an expired token. |
 | `close` | | The shopper tapped the header's close button. Dismiss the chat UI. |
-| `openUrl` | `url: string` | The shopper tapped a link (a product card, a link in a reply, a file). Give it to the app's delegate, or open it in an in-app browser (SFSafariViewController / Custom Tabs). |
-| `message` | `preview: string`, `author: 'ai' \| 'agent'` | A reply arrived while the chat wasn't visible (see `visibility`). For an in-app badge. |
+| `message` | `preview: string`, `author: 'ai' \| 'agent'` | A reply finished. Sent for every reply; native drops it while the chat is on screen and the app is in the foreground, and otherwise passes it to the app (for an in-app badge). |
 | `openSettings` | | The microphone permission is denied. Open the app's system settings page. |
 | `unavailable` | | The chat is switched off for this store (or failed to start). Show nothing / dismiss; reload the page on the next preload or open. Also posted by the page itself when the bundle fails to load. |
 
+**Links.** The widget doesn't intercept clicks or post links: links are ordinary `<a href>` elements (a product card,
+a link in a reply, a file), `target="_blank"` included. Native intercepts every navigation that would leave the page
+and gives the URL to the app's delegate / listener, or opens it in an in-app browser (SFSafariViewController / Custom
+Tabs): iOS in `decidePolicyFor` (main-frame navigations) and `createWebViewWith` (new windows, which it never
+opens), Android in `shouldOverrideUrlLoading` with `setSupportMultipleWindows(false)` (so new-window links navigate
+the WebView and are intercepted the same way). Both let scripts open windows without a tap, since every new window
+is routed this way.
+
 **Native → widget.** Native runs `window.KodifChatNative.receive(<message JSON>)` (`evaluateJavaScript` /
-`evaluateJavascript`), only after `ready`; queue anything earlier.
+`evaluateJavascript`), only after `ready`; queue anything earlier. Several messages may arrive in one script, in
+order (`receive(a); receive(b)`), e.g. everything flushed on `ready`.
 
 The widget sends `ready` as soon as its bridge is listening (`window.KodifChatNative` is installed). That happens at
 construction, before the chat UI mounts and before `requestToken`, so `ready` means "you can call
@@ -97,7 +105,6 @@ follow the same rule as every other native → widget message: they're sent afte
 | type | fields | widget does |
 |---|---|---|
 | `token` | `id?: string`, `jwt: string \| null` | Answers `requestToken` (with its `id`). Sent without `id` when the app's shopper logs in or out: a JWT signs the widget in with that token directly (it doesn't send `requestToken` again); `null` starts a fresh anonymous shopper, so the previous shopper's conversations are no longer reachable on the device. |
-| `visibility` | `visible: boolean` | Whether the chat UI is on screen. The SDK keeps one preloaded WebView, so the widget can be alive but not shown. |
 | `appState` | `state: 'foreground' \| 'background'` | In the background the widget leaves an ongoing voice call (it rejoins on foreground, if the call is still going). |
 | `customContext` | `context: object \| null` | Replaces the conversation's custom context (`null` clears it). Native sends it right after `ready` when the app has set one, and whenever the app changes it. |
 

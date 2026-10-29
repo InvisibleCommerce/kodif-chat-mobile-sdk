@@ -18,10 +18,6 @@ final class BridgeMessageTests: XCTestCase {
         XCTAssertEqual(decode(#"{"v":1,"type":"requestToken","id":"abc"}"#), .requestToken(id: "abc"))
         XCTAssertEqual(decode(#"{"v":1,"type":"close"}"#), .close)
         XCTAssertEqual(
-            decode(#"{"v":1,"type":"openUrl","url":"https://example.com/p?a=1"}"#),
-            .openURL("https://example.com/p?a=1")
-        )
-        XCTAssertEqual(
             decode(#"{"v":1,"type":"message","preview":"Your order shipped","author":"ai"}"#),
             .message(preview: "Your order shipped", author: .ai)
         )
@@ -39,6 +35,8 @@ final class BridgeMessageTests: XCTestCase {
 
     func testIgnoresUnknownTypesAndVersions() {
         XCTAssertNil(decode(#"{"v":1,"type":"somethingNew"}"#))
+        // Dropped from the protocol: links leave the page through navigation interception.
+        XCTAssertNil(decode(#"{"v":1,"type":"openUrl","url":"https://example.com"}"#))
         XCTAssertNil(decode(#"{"v":2,"type":"ready"}"#))
         XCTAssertNil(decode(#"{"v":"1","type":"ready"}"#))
         XCTAssertNil(decode(#"{"type":"ready"}"#))
@@ -53,7 +51,6 @@ final class BridgeMessageTests: XCTestCase {
         XCTAssertNil(decode("[1,2]"))
         XCTAssertNil(decode(#"{"v":1,"type":"requestToken"}"#))
         XCTAssertNil(decode(#"{"v":1,"type":"requestToken","id":7}"#))
-        XCTAssertNil(decode(#"{"v":1,"type":"openUrl"}"#))
         XCTAssertNil(decode(#"{"v":1,"type":"message","preview":"x","author":"robot"}"#))
         XCTAssertNil(decode(#"{"v":1,"type":"message","author":"ai"}"#))
     }
@@ -72,11 +69,6 @@ final class BridgeMessageTests: XCTestCase {
     func testEncodesLoginAndLogoutWithoutId() throws {
         XCTAssertEqual(BridgeMessage.Outgoing.token(id: nil, jwt: "eyJ.x.y").json, #"{"jwt":"eyJ.x.y","type":"token","v":1}"#)
         XCTAssertEqual(BridgeMessage.Outgoing.token(id: nil, jwt: nil).json, #"{"jwt":null,"type":"token","v":1}"#)
-    }
-
-    func testEncodesVisibility() {
-        XCTAssertEqual(BridgeMessage.Outgoing.visibility(true).json, #"{"type":"visibility","v":1,"visible":true}"#)
-        XCTAssertEqual(BridgeMessage.Outgoing.visibility(false).json, #"{"type":"visibility","v":1,"visible":false}"#)
     }
 
     func testEncodesAppState() {
@@ -117,12 +109,5 @@ final class BridgeMessageTests: XCTestCase {
         XCTAssertFalse(json.contains("\u{2028}"))
         XCTAssertFalse(json.contains("\u{2029}"))
         XCTAssertEqual(try object(.token(id: nil, jwt: jwt))["jwt"] as? String, jwt)
-    }
-
-    func testOnlyTokensWaitForReady() {
-        XCTAssertTrue(BridgeMessage.Outgoing.token(id: nil, jwt: nil).isQueuedUntilReady)
-        XCTAssertFalse(BridgeMessage.Outgoing.customContext(nil).isQueuedUntilReady)
-        XCTAssertFalse(BridgeMessage.Outgoing.visibility(true).isQueuedUntilReady)
-        XCTAssertFalse(BridgeMessage.Outgoing.appState(foreground: true).isQueuedUntilReady)
     }
 }

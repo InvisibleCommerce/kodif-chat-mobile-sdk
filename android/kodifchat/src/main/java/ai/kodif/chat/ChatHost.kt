@@ -69,15 +69,17 @@ internal class ChatHost(
         val activity = activity ?: return false
         fileCallback?.onReceiveValue(null)
         fileCallback = callback
-        val acceptsImages = acceptsImages(params)
+        val mimeTypes = mimeTypes(params)
+        val multiple = params.mode == FileChooserParams.MODE_OPEN_MULTIPLE
+        val acceptsImages = mimeTypes.isEmpty() || mimeTypes.any { it == "*/*" || it.startsWith("image/") }
         val canUseCamera = acceptsImages && activity.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
         // An app that declares CAMERA must hold it before another app can capture for it; one that doesn't needs nothing.
-        if (canUseCamera && declaresPermission(activity, Manifest.permission.CAMERA) &&
-            !isGranted(activity, Manifest.permission.CAMERA)
-        ) {
-            requestPermission(Manifest.permission.CAMERA) { granted -> launchChooser(activity, params, granted) }
+        if (canUseCamera && declaresCamera(activity) && !isGranted(activity, Manifest.permission.CAMERA)) {
+            requestPermission(Manifest.permission.CAMERA) { granted ->
+                launchChooser(activity, mimeTypes, multiple, withCamera = granted)
+            }
         } else {
-            launchChooser(activity, params, canUseCamera)
+            launchChooser(activity, mimeTypes, multiple, withCamera = canUseCamera)
         }
         return true
     }
@@ -91,14 +93,13 @@ internal class ChatHost(
         callback?.invoke(false)
     }
 
-    private fun launchChooser(activity: Activity, params: FileChooserParams, withCamera: Boolean) {
+    private fun launchChooser(activity: Activity, mimeTypes: List<String>, multiple: Boolean, withCamera: Boolean) {
         if (fileCallback == null) return
         val content = Intent(Intent.ACTION_GET_CONTENT)
             .addCategory(Intent.CATEGORY_OPENABLE)
             .setType("*/*")
-        val mimeTypes = mimeTypes(params)
         if (mimeTypes.isNotEmpty()) content.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.toTypedArray())
-        if (params.mode == FileChooserParams.MODE_OPEN_MULTIPLE) content.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        if (multiple) content.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
 
         val chooser = Intent.createChooser(content, null)
         if (withCamera) cameraIntent(activity)?.let { chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(it)) }
@@ -158,13 +159,16 @@ internal class ChatHost(
         fun isGranted(context: Context, permission: String): Boolean =
             ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
-        fun declaresPermission(context: Context, permission: String): Boolean = try {
+        /** Whether the app's manifest declares CAMERA. It can't change while the app runs, so it's read once. */
+        private var cameraDeclared: Boolean? = null
+
+        fun declaresCamera(context: Context): Boolean = cameraDeclared ?: try {
             @Suppress("DEPRECATION")
             val info = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
-            info.requestedPermissions?.contains(permission) == true
+            info.requestedPermissions?.contains(Manifest.permission.CAMERA) == true
         } catch (_: PackageManager.NameNotFoundException) {
             false
-        }
+        }.also { cameraDeclared = it }
 
         /** The MIME types an `<input type=file accept=...>` asks for (extensions mapped to types). */
         fun mimeTypes(params: FileChooserParams): List<String> = params.acceptTypes.orEmpty()
@@ -175,10 +179,5 @@ internal class ChatHost(
                 if (type.startsWith(".")) MimeTypeMap.getSingleton().getMimeTypeFromExtension(type.drop(1)) else type
             }
             .distinct()
-
-        private fun acceptsImages(params: FileChooserParams): Boolean {
-            val types = mimeTypes(params)
-            return types.isEmpty() || types.any { it == "*/*" || it.startsWith("image/") }
-        }
     }
 }

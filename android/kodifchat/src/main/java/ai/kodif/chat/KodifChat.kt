@@ -61,6 +61,7 @@ public object KodifChat {
     internal var isForeground: Boolean = true
         private set
     private var lifecycleObserverAdded = false
+    private var preloadPending = false
 
     /**
      * Supplies the shopper's JWT, fetched from your backend, when the chat asks for one: when it starts and when a
@@ -69,7 +70,10 @@ public object KodifChat {
     @JvmStatic
     public var tokenProvider: TokenProvider? = null
 
-    /** Receives the chat's events. Held strongly: clear it when its owner goes away. */
+    /**
+     * Receives the chat's events. Held strongly: set it from something that outlives the chat (your Application), or
+     * set it back to null when its owner (an activity) is destroyed.
+     */
     @JvmStatic
     public var listener: KodifChatListener? = null
 
@@ -126,10 +130,22 @@ public object KodifChat {
         onMain { session?.send(BridgeMessage.Outgoing.Token(id = null, jwt = jwt)) }
     }
 
-    /** Starts the chat in the background so [open] shows it instantly. */
+    /**
+     * Starts the chat in the background so [open] shows it instantly. Call it from your first screen: the WebView is
+     * created once the main thread is idle, so it doesn't hold up that screen (an [open] before then just starts the
+     * chat right away).
+     */
     @JvmStatic
     public fun preload() {
-        onMain { requireSession().preload() }
+        onMain {
+            if (preloadPending) return@onMain
+            preloadPending = true
+            Looper.myQueue().addIdleHandler {
+                preloadPending = false
+                if (configuration != null) requireSession().preload()
+                false
+            }
+        }
     }
 
     /** Opens the chat full screen in [KodifChatActivity]. */

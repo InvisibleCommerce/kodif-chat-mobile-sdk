@@ -68,10 +68,10 @@ final class KodifChatSession: NSObject {
         if state.isFailed { loadPage() }
     }
 
-    /// Tells the widget whether `controller`, if it's the one holding the chat, is on screen.
+    /// Whether `controller`, if it's the one holding the chat, is on screen (see ``ChatPageState/reportsReplies``).
     func setVisible(_ visible: Bool, from controller: KodifChatViewController) {
         guard controller === hostController else { return }
-        deliver(state.setVisible(visible))
+        state.setVisible(visible)
     }
 
     // MARK: Native → widget
@@ -81,15 +81,18 @@ final class KodifChatSession: NSObject {
         deliver(state.send(message))
     }
 
+    /// Delivers `messages` in one script, in order.
     private func deliver(_ messages: [BridgeMessage.Outgoing]) {
         guard !isInvalidated else { return }
-        for message in messages {
+        let calls = messages.compactMap { message -> String? in
             guard let json = message.json else {
                 kodifChatLog.error("Dropped a \(message.type, privacy: .public) message that couldn't be encoded as JSON")
-                continue
+                return nil
             }
-            webView.evaluateJavaScript("window.KodifChatNative && window.KodifChatNative.receive(\(json))", completionHandler: nil)
+            return "window.KodifChatNative.receive(\(json))"
         }
+        guard !calls.isEmpty else { return }
+        webView.evaluateJavaScript("if (window.KodifChatNative) { \(calls.joined(separator: ";")) }", completionHandler: nil)
     }
 
     // MARK: Page
@@ -99,6 +102,9 @@ final class KodifChatSession: NSObject {
         configuration.websiteDataStore = .default()
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
+        // Links leave the page only through navigation interception (decidePolicyFor / createWebViewWith). Every new
+        // window request is routed like a link and never opens a window, so window.open needn't wait for a tap.
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.userContentController.add(WeakScriptMessageHandler(self), name: Self.messageHandlerName)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
@@ -172,10 +178,11 @@ final class KodifChatSession: NSObject {
         case .close:
             hostController?.dismissChat()
             KodifChat.delegate?.kodifChatDidClose()
-        case let .openURL(string):
-            if let url = URL(string: string) { open(url) }
         case let .message(preview, author):
-            KodifChat.delegate?.kodifChat(didReceiveMessage: preview, author: author)
+            // The widget posts every finished reply; the app only hears about the ones the shopper isn't watching.
+            if state.reportsReplies {
+                KodifChat.delegate?.kodifChat(didReceiveMessage: preview, author: author)
+            }
         case .openSettings:
             if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
         case .unavailable:
@@ -191,8 +198,8 @@ final class KodifChatSession: NSObject {
             return
         }
         // The provider may call back on any thread.
-        provider { @Sendable jwt in
-            Task { @MainActor in self.answerToken(id: id, jwt: jwt, loadID: loadID) }
+        provider { @Sendable [weak self] jwt in
+            Task { @MainActor [weak self] in self?.answerToken(id: id, jwt: jwt, loadID: loadID) }
         }
     }
 
@@ -202,6 +209,7 @@ final class KodifChatSession: NSObject {
 
     // MARK: Links
 
+    /// A link left the page: the delegate's, else an in-app Safari view (http/https) or the system (mailto, tel, …).
     func open(_ url: URL) {
         if KodifChat.delegate?.kodifChat(openURL: url) == true { return }
         switch url.scheme?.lowercased() {

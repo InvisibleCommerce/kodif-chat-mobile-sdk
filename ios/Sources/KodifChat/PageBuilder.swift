@@ -4,13 +4,12 @@ import Foundation
 enum PageBuilder {
     /// The page's origin: https, so voice mode's microphone gets a secure context. Never fetched.
     static let baseURL = URL(string: "https://mobile-chat.kodif.ai/")!
-    static let baseHost = "mobile-chat.kodif.ai"
+    static let baseHost = baseURL.host!
 
     struct Options {
         var integrationId: String
         var microphone: Bool
         var language: String?
-        var host = "ios"
     }
 
     /// Posted straight to the native handler when the bundle fails to load, so native treats it like the widget's
@@ -25,7 +24,7 @@ enum PageBuilder {
     static func optionsJSON(_ options: Options) -> String {
         var object: [String: Any] = [
             "integrationId": options.integrationId,
-            "host": options.host,
+            "host": "ios",
             "hostCapabilities": ["microphone": options.microphone],
         ]
         if let language = options.language { object["language"] = language }

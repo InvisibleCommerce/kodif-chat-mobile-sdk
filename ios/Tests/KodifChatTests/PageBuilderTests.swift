@@ -104,9 +104,4 @@ final class PageBuilderTests: XCTestCase {
         let html = PageBuilder.html(bundleURL: url, options: .init(integrationId: "i", microphone: false))
         XCTAssertTrue(html.contains(#"src="https://example.test/b.js?a=1&amp;b=%22x" onerror="#))
     }
-
-    func testBaseURLIsHTTPS() {
-        XCTAssertEqual(PageBuilder.baseURL.scheme, "https")
-        XCTAssertEqual(PageBuilder.baseURL.host, PageBuilder.baseHost)
-    }
 }

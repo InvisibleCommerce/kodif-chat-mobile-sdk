@@ -19,7 +19,6 @@ internal object BridgeMessage {
         data object Ready : Incoming()
         data class RequestToken(val id: String) : Incoming()
         data object Close : Incoming()
-        data class OpenUrl(val url: String) : Incoming()
         data class Message(val preview: String, val author: KodifChat.Author) : Incoming()
         data object OpenSettings : Incoming()
         data object Unavailable : Incoming()
@@ -42,7 +41,6 @@ internal object BridgeMessage {
                     "ready" -> Ready
                     "requestToken" -> obj.string("id")?.let { RequestToken(it) }
                     "close" -> Close
-                    "openUrl" -> obj.string("url")?.let { OpenUrl(it) }
                     "message" -> {
                         val preview = obj.string("preview")
                         val author = KodifChat.Author.fromWire(obj.string("author"))
@@ -76,11 +74,6 @@ internal object BridgeMessage {
                 if (id != null) put("id", id)
                 put("jwt", jwt)
             }
-        }
-
-        data class Visibility(val visible: Boolean) : Outgoing() {
-            override val type: String get() = "visibility"
-            override fun fields(): Map<String, JsonElement> = mapOf("visible" to JsonPrimitive(visible))
         }
 
         data class AppState(val foreground: Boolean) : Outgoing() {

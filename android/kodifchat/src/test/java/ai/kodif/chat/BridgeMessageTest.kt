@@ -18,10 +18,6 @@ class BridgeMessageTest {
         assertEquals(Incoming.RequestToken("abc"), Incoming.parse("""{"v":1,"type":"requestToken","id":"abc"}"""))
         assertEquals(Incoming.Close, Incoming.parse("""{"v":1,"type":"close"}"""))
         assertEquals(
-            Incoming.OpenUrl("https://example.com/p?a=1"),
-            Incoming.parse("""{"v":1,"type":"openUrl","url":"https://example.com/p?a=1"}"""),
-        )
-        assertEquals(
             Incoming.Message("Your order shipped", KodifChat.Author.AI),
             Incoming.parse("""{"v":1,"type":"message","preview":"Your order shipped","author":"ai"}"""),
         )
@@ -41,6 +37,8 @@ class BridgeMessageTest {
     @Test
     fun ignoresUnknownTypesAndVersions() {
         assertNull(Incoming.parse("""{"v":1,"type":"somethingNew"}"""))
+        // Dropped from the protocol: links leave the page through navigation interception.
+        assertNull(Incoming.parse("""{"v":1,"type":"openUrl","url":"https://example.com"}"""))
         assertNull(Incoming.parse("""{"v":2,"type":"ready"}"""))
         assertNull(Incoming.parse("""{"v":"1","type":"ready"}"""))
         assertNull(Incoming.parse("""{"type":"ready"}"""))
@@ -56,7 +54,6 @@ class BridgeMessageTest {
         assertNull(Incoming.parse(""""ready""""))
         assertNull(Incoming.parse("""{"v":1,"type":"requestToken"}"""))
         assertNull(Incoming.parse("""{"v":1,"type":"requestToken","id":7}"""))
-        assertNull(Incoming.parse("""{"v":1,"type":"openUrl"}"""))
         assertNull(Incoming.parse("""{"v":1,"type":"message","preview":"x","author":"robot"}"""))
         assertNull(Incoming.parse("""{"v":1,"type":"message","author":"ai"}"""))
     }
@@ -78,12 +75,6 @@ class BridgeMessageTest {
     fun encodesLoginAndLogoutWithoutId() {
         assertEquals("""{"v":1,"type":"token","jwt":"eyJ.x.y"}""", Outgoing.Token(null, "eyJ.x.y").toJson())
         assertEquals("""{"v":1,"type":"token","jwt":null}""", Outgoing.Token(null, null).toJson())
-    }
-
-    @Test
-    fun encodesVisibility() {
-        assertEquals("""{"v":1,"type":"visibility","visible":true}""", Outgoing.Visibility(true).toJson())
-        assertEquals("""{"v":1,"type":"visibility","visible":false}""", Outgoing.Visibility(false).toJson())
     }
 
     @Test
@@ -126,7 +117,6 @@ class BridgeMessageTest {
     fun outgoingMessagesAreVersioned() {
         listOf(
             Outgoing.Token("a", null),
-            Outgoing.Visibility(true),
             Outgoing.AppState(false),
             Outgoing.CustomContext(emptyMap()),
         ).forEach { message ->

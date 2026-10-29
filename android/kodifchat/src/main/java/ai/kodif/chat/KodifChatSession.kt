@@ -119,10 +119,9 @@ internal class KodifChatSession(
         contextWrapper.baseContext = appContext
     }
 
-    /** Tells the widget whether [host], if it's the one holding the chat, is on screen. */
+    /** Whether [host], if it's the one holding the chat, is on screen (see [ChatPageState.reportsReplies]). */
     fun setVisible(host: ChatHost, visible: Boolean) {
-        if (this.host !== host) return
-        deliver(state.setVisible(visible))
+        if (this.host === host) state.setVisible(visible)
     }
 
     fun setForeground(foreground: Boolean) {
@@ -134,11 +133,12 @@ internal class KodifChatSession(
         deliver(state.send(message))
     }
 
+    /** Delivers [messages] in one script, in order. */
     private fun deliver(messages: List<BridgeMessage.Outgoing>) {
         val view = webView ?: return
-        for (message in messages) {
-            view.evaluateJavascript("window.KodifChatNative && window.KodifChatNative.receive(${message.toJson()})", null)
-        }
+        if (messages.isEmpty()) return
+        val script = messages.joinToString(";") { "window.KodifChatNative.receive(${it.toJson()})" }
+        view.evaluateJavascript("if (window.KodifChatNative) { $script }", null)
     }
 
     fun destroy() {
@@ -164,7 +164,10 @@ internal class KodifChatSession(
             allowFileAccess = false
             allowContentAccess = false
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            // Links leave the page only through shouldOverrideUrlLoading. With one window, target=_blank links
+            // and window.open navigate this WebView, so they're intercepted and routed like any other link.
             setSupportMultipleWindows(false)
+            javaScriptCanOpenWindowsAutomatically = true
             setGeolocationEnabled(false)
         }
         view.webViewClient = Client()
@@ -249,8 +252,9 @@ internal class KodifChatSession(
                 host?.dismiss()
                 listener?.onClose()
             }
-            is BridgeMessage.Incoming.OpenUrl -> openUrl(message.url)
-            is BridgeMessage.Incoming.Message -> listener?.onMessage(message.preview, message.author)
+            // The widget posts every finished reply; the app only hears about the ones the shopper isn't watching.
+            is BridgeMessage.Incoming.Message ->
+                if (state.reportsReplies) listener?.onMessage(message.preview, message.author)
             BridgeMessage.Incoming.OpenSettings -> openSettings()
             // Switched off for this store, or failed to start: start over the next time the chat is shown.
             BridgeMessage.Incoming.Unavailable -> fail()
@@ -281,6 +285,7 @@ internal class KodifChatSession(
         if (!isDestroyed) deliver(state.tokenAnswered(id, jwt, loadId))
     }
 
+    /** A link left the page: the listener's, else a Custom Tab (http/https) or the system (mailto, tel, …). */
     private fun openUrl(url: String) {
         if (KodifChat.listener?.onOpenUrl(url) == true) return
         val uri = Uri.parse(url)

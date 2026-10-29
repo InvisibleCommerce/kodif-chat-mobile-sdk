@@ -14,28 +14,36 @@ class ChatPageStateTest {
         val state = ChatPageState()
         state.startLoad()
         assertEquals(emptyList<Outgoing>(), state.send(Outgoing.Token(null, "jwt")))
-        assertEquals(emptyList<Outgoing>(), state.setVisible(true))
+        assertEquals(emptyList<Outgoing>(), state.setForeground(false))
         assertEquals(emptyList<Outgoing>(), state.send(Outgoing.CustomContext(mapOf("stale" to true))))
 
         assertEquals(
-            listOf(
-                Outgoing.Visibility(true),
-                Outgoing.AppState(true),
-                Outgoing.CustomContext(context),
-                Outgoing.Token(null, "jwt"),
-            ),
+            listOf(Outgoing.AppState(false), Outgoing.CustomContext(context), Outgoing.Token(null, "jwt")),
             state.ready(context),
         )
         assertTrue(state.isReady)
-        assertEquals(listOf(Outgoing.Visibility(false)), state.setVisible(false))
+        assertEquals(listOf(Outgoing.AppState(true)), state.setForeground(true))
         assertEquals(listOf(Outgoing.CustomContext(null)), state.send(Outgoing.CustomContext(null)))
+    }
+
+    @Test
+    fun reportsRepliesUnlessTheChatIsOnScreenInTheForeground() {
+        val state = ChatPageState()
+        assertTrue(state.reportsReplies) // preloaded, not shown
+        state.setVisible(true)
+        assertFalse(state.reportsReplies) // the shopper is watching
+        state.setForeground(false)
+        assertTrue(state.reportsReplies) // on screen, but the app is in the background
+        state.setForeground(true)
+        state.setVisible(false)
+        assertTrue(state.reportsReplies) // closed
     }
 
     @Test
     fun sendsNoCustomContextOnReadyWhenTheAppHasNone() {
         val state = ChatPageState()
         state.startLoad()
-        assertEquals(listOf(Outgoing.Visibility(false), Outgoing.AppState(true)), state.ready(null))
+        assertEquals(listOf(Outgoing.AppState(true)), state.ready(null))
     }
 
     @Test
@@ -75,7 +83,7 @@ class ChatPageStateTest {
         state.send(Outgoing.Token(null, "jwt"))
         state.startLoad()
         assertEquals(emptyList<Outgoing>(), state.tokenAnswered("t1", "jwt", first))
-        assertEquals(listOf(Outgoing.Visibility(false), Outgoing.AppState(true)), state.ready(null))
+        assertEquals(listOf(Outgoing.AppState(true)), state.ready(null))
     }
 
     @Test
@@ -119,7 +127,7 @@ class ChatPageStateTest {
 
         state.startLoad()
         assertFalse(state.isFailed)
-        assertEquals(listOf(Outgoing.Visibility(false), Outgoing.AppState(true)), state.ready(null))
+        assertEquals(listOf(Outgoing.AppState(true)), state.ready(null))
     }
 
     @Test

@@ -24,30 +24,35 @@ struct ChatPageState {
         return loadID
     }
 
-    /// The widget's bridge is listening: the current visibility, app state and custom context, then the queued
-    /// messages. Nothing once the load has failed.
+    /// The widget's bridge is listening: the current app state and custom context, then the queued messages. Nothing
+    /// once the load has failed.
     mutating func ready(customContext: [String: Any]?) -> [BridgeMessage.Outgoing] {
         guard !isFailed else { return [] }
         isReady = true
-        var messages: [BridgeMessage.Outgoing] = [.visibility(isVisible), .appState(foreground: isForeground)]
+        var messages: [BridgeMessage.Outgoing] = [.appState(foreground: isForeground)]
         if let customContext { messages.append(.customContext(customContext)) }
         messages += queue
         queue.removeAll()
         return messages
     }
 
-    /// `message` now if the widget is ready. Before that only tokens are queued: visibility, app state and custom
-    /// context are state, sent as they are on `ready`.
+    /// `message` now if the widget is ready. Before that only tokens are queued: app state and custom context are
+    /// state, sent as they are on `ready`.
     mutating func send(_ message: BridgeMessage.Outgoing) -> [BridgeMessage.Outgoing] {
         if isReady { return [message] }
-        if message.isQueuedUntilReady && !isFailed { queue.append(message) }
+        if case .token = message, !isFailed { queue.append(message) }
         return []
     }
 
-    mutating func setVisible(_ visible: Bool) -> [BridgeMessage.Outgoing] {
-        guard visible != isVisible else { return [] }
+    /// Whether the chat is on screen. Native only: it decides which replies the app hears about.
+    mutating func setVisible(_ visible: Bool) {
         isVisible = visible
-        return send(.visibility(visible))
+    }
+
+    /// Whether a finished reply goes to the app (for a badge): not while the shopper is looking at the chat, i.e.
+    /// it's on screen and the app is in the foreground.
+    var reportsReplies: Bool {
+        !(isVisible && isForeground)
     }
 
     mutating func setForeground(_ foreground: Bool) -> [BridgeMessage.Outgoing] {

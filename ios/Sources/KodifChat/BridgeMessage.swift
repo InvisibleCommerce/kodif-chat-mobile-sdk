@@ -9,13 +9,12 @@ enum BridgeMessage {
         case ready
         case requestToken(id: String)
         case close
-        case openURL(String)
         case message(preview: String, author: KodifChat.Author)
         case openSettings
         case unavailable
 
         private enum CodingKeys: String, CodingKey {
-            case v, type, id, url, preview, author
+            case v, type, id, preview, author
         }
 
         init(from decoder: Decoder) throws {
@@ -33,8 +32,6 @@ enum BridgeMessage {
                 self = .requestToken(id: try container.decode(String.self, forKey: .id))
             case "close":
                 self = .close
-            case "openUrl":
-                self = .openURL(try container.decode(String.self, forKey: .url))
             case "message":
                 let preview = try container.decode(String.self, forKey: .preview)
                 let rawAuthor = try container.decode(String.self, forKey: .author)
@@ -67,25 +64,14 @@ enum BridgeMessage {
     enum Outgoing {
         /// Answers `requestToken` (with its `id`), or pushes a login / logout when `id` is nil.
         case token(id: String?, jwt: String?)
-        case visibility(Bool)
         case appState(foreground: Bool)
         case customContext([String: Any]?)
 
         var type: String {
             switch self {
             case .token: return "token"
-            case .visibility: return "visibility"
             case .appState: return "appState"
             case .customContext: return "customContext"
-            }
-        }
-
-        /// Whether the message waits in the queue until `ready`. Only tokens do: visibility, app state and custom
-        /// context are state, sent as they are on every `ready`.
-        var isQueuedUntilReady: Bool {
-            switch self {
-            case .token: return true
-            case .visibility, .appState, .customContext: return false
             }
         }
 
@@ -95,12 +81,11 @@ enum BridgeMessage {
             case let .token(id, jwt):
                 if let id { object["id"] = id }
                 object["jwt"] = jwt ?? NSNull()
-            case let .visibility(visible):
-                object["visible"] = visible
             case let .appState(foreground):
                 object["state"] = foreground ? "foreground" : "background"
             case let .customContext(context):
-                object["context"] = context.map { JSONEmbedding.sanitize($0) } ?? NSNull()
+                // JSONEmbedding.encode sanitizes it.
+                object["context"] = context ?? NSNull()
             }
             return object
         }

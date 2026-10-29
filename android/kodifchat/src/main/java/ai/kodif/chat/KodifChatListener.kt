@@ -3,15 +3,18 @@ package ai.kodif.chat
 /** Events from the chat. Every method has a default, so implement only what you need. */
 public interface KodifChatListener {
     /**
-     * The shopper tapped a link (a product card, a link in a reply, a file). Return true if the app handled it;
-     * false (the default) opens it in a Custom Tab.
+     * The shopper tapped a link that leaves the chat (a product card, a link in a reply, a file; new-window links
+     * too). Return true if the app handled it; false (the default) opens it in a Custom Tab.
      */
     public fun onOpenUrl(url: String): Boolean = false
 
     /** The shopper closed the chat. [KodifChatActivity] has already finished; a [KodifChatFragment] host removes it. */
     public fun onClose() {}
 
-    /** A reply arrived while the chat wasn't on screen, for an in-app badge. */
+    /**
+     * A reply arrived while the shopper wasn't looking (the chat isn't on screen, or the app is in the background),
+     * for an in-app badge.
+     */
     public fun onMessage(preview: String, author: KodifChat.Author) {}
 
     /**

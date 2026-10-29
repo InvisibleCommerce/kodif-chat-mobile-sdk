@@ -10,7 +10,6 @@ internal object PageBuilder {
         val integrationId: String,
         val microphone: Boolean,
         val language: String? = null,
-        val host: String = "android",
     )
 
     /**
@@ -29,7 +28,7 @@ internal object PageBuilder {
     fun optionsJson(options: Options): String {
         val fields = linkedMapOf<String, JsonElement>(
             "integrationId" to JsonPrimitive(options.integrationId),
-            "host" to JsonPrimitive(options.host),
+            "host" to JsonPrimitive("android"),
             "hostCapabilities" to JsonObject(mapOf("microphone" to JsonPrimitive(options.microphone))),
         )
         options.language?.let { fields["language"] = JsonPrimitive(it) }

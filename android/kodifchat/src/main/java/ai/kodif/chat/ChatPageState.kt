@@ -34,13 +34,13 @@ internal class ChatPageState {
     }
 
     /**
-     * The widget's bridge is listening: the current visibility, app state and custom context, then the queued
-     * messages. Nothing once the load has failed.
+     * The widget's bridge is listening: the current app state and custom context, then the queued messages. Nothing
+     * once the load has failed.
      */
     fun ready(customContext: Map<String, Any?>?): List<Outgoing> {
         if (isFailed) return emptyList()
         isReady = true
-        val messages = mutableListOf<Outgoing>(Outgoing.Visibility(isVisible), Outgoing.AppState(isForeground))
+        val messages = mutableListOf<Outgoing>(Outgoing.AppState(isForeground))
         if (customContext != null) messages += Outgoing.CustomContext(customContext)
         messages += queue
         queue.clear()
@@ -48,8 +48,8 @@ internal class ChatPageState {
     }
 
     /**
-     * [message] now if the widget is ready. Before that only tokens are queued: visibility, app state and custom
-     * context are state, sent as they are on `ready`.
+     * [message] now if the widget is ready. Before that only tokens are queued: app state and custom context are
+     * state, sent as they are on `ready`.
      */
     fun send(message: Outgoing): List<Outgoing> = when {
         isReady -> listOf(message)
@@ -60,11 +60,16 @@ internal class ChatPageState {
         else -> emptyList()
     }
 
-    fun setVisible(visible: Boolean): List<Outgoing> {
-        if (visible == isVisible) return emptyList()
+    /** Whether the chat is on screen. Native only: it decides which replies the app hears about. */
+    fun setVisible(visible: Boolean) {
         isVisible = visible
-        return send(Outgoing.Visibility(visible))
     }
+
+    /**
+     * Whether a finished reply goes to the app (for a badge): not while the shopper is looking at the chat, i.e.
+     * it's on screen and the app is in the foreground.
+     */
+    val reportsReplies: Boolean get() = !(isVisible && isForeground)
 
     fun setForeground(foreground: Boolean): List<Outgoing> {
         if (foreground == isForeground) return emptyList()

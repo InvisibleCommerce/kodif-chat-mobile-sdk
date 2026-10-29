@@ -67,12 +67,56 @@ class BridgeRoundTripTest {
         val received = pollJs("JSON.stringify(window.__received)") { it.contains("\"type\":\"token\"") }
         assertTrue(received, received.contains("{\"v\":1,\"type\":\"token\",\"id\":\"t1\",\"jwt\":\"test-jwt\"}"))
         // On ready, native sends the current state first.
-        assertTrue(received, received.contains("\"type\":\"visibility\",\"visible\":false"))
-        assertTrue(received, received.contains("\"type\":\"appState\""))
+        assertTrue(received, received.startsWith("[{\"v\":1,\"type\":\"appState\""))
 
         assertEquals("true", evaluate("window.isSecureContext"))
         assertEquals("\"android\"", evaluate("window.__options.host"))
         assertEquals("\"https://appassets.androidplatform.net\"", evaluate("location.origin"))
+    }
+
+    /** Links leave the page only through navigation interception: a plain link and a target=_blank one. */
+    @Test
+    fun linksReachTheOpenUrlPath() {
+        val stub = """
+            window.ShippedAI = { ChatWidget: function () {
+              window.KodifChatNative = { receive: function () {} };
+              window.__click = function (href, target) {
+                var a = document.createElement('a');
+                a.href = href;
+                if (target) a.target = target;
+                document.body.appendChild(a);
+                a.click();
+              };
+              window.kodifChat.postMessage(JSON.stringify({ v: 1, type: 'ready' }));
+            } };
+            window.dispatchEvent(new Event('shipped:chat-script-loaded'));
+        """.trimIndent()
+        val bundleUrl = "data:text/javascript;base64," + Base64.encodeToString(stub.toByteArray(), Base64.NO_WRAP)
+        val opened = java.util.concurrent.LinkedBlockingQueue<String>()
+        val ready = CountDownLatch(1)
+        instrumentation.runOnMainSync {
+            KodifChat.configure(instrumentation.targetContext, "test-integration", KodifChat.Environment.Custom(bundleUrl))
+            KodifChat.listener = object : KodifChatListener {
+                override fun onOpenUrl(url: String): Boolean {
+                    opened += url
+                    return true
+                }
+            }
+            val session = KodifChat.requireSession()
+            session.onIncoming = { if (it == BridgeMessage.Incoming.Ready) ready.countDown() }
+            session.preload()
+        }
+        try {
+            assertTrue("the stub never got ready", ready.await(30, TimeUnit.SECONDS))
+            evaluate("__click('https://example.com/plain')")
+            assertEquals("https://example.com/plain", opened.poll(10, TimeUnit.SECONDS))
+            evaluate("__click('https://example.com/new-window', '_blank')")
+            assertEquals("https://example.com/new-window", opened.poll(10, TimeUnit.SECONDS))
+            // The page stayed.
+            assertEquals("\"https://appassets.androidplatform.net/kodif-chat/index.html\"", evaluate("location.href"))
+        } finally {
+            instrumentation.runOnMainSync { KodifChat.listener = null }
+        }
     }
 
     @Test

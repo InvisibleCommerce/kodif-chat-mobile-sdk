@@ -55,9 +55,13 @@ public enum KodifChat {
         set { delegateBox.value = newValue }
     }
 
-    /// Starts the chat in the background, so presenting it later is instant.
+    /// Starts the chat in the background, so presenting it later is instant. Call it from your first screen: the web
+    /// view is created on the next turn of the main run loop, so it doesn't hold up that screen (presenting the chat
+    /// before then just starts it right away).
     public static func preload() {
-        sharedSession()?.reloadIfFailed()
+        DispatchQueue.main.async {
+            sharedSession()?.reloadIfFailed()
+        }
     }
 
     /// Presents the chat full screen from `presenter`. Does nothing if the chat is already on screen.

@@ -11,6 +11,7 @@ import androidx.fragment.app.Fragment
 /**
  * The chat, for embedding in your own screen. It fills its container and pads itself by the system bars and the
  * keyboard. When the shopper closes the chat, [KodifChatListener.onClose] is called: remove the fragment there.
+ * ([KodifChatActivity] hosts one too, and finishes instead.)
  */
 public class KodifChatFragment : Fragment() {
     private lateinit var host: ChatHost
@@ -18,7 +19,7 @@ public class KodifChatFragment : Fragment() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        host = ChatHost(this, { activity }, {})
+        host = ChatHost(this, { activity }, { (activity as? KodifChatActivity)?.finish() })
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View =

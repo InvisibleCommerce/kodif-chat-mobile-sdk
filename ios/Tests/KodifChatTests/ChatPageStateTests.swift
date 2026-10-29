@@ -14,27 +14,34 @@ final class ChatPageStateTests: XCTestCase {
         var state = ChatPageState()
         _ = state.startLoad()
         XCTAssertTrue(state.send(.token(id: nil, jwt: "jwt")).isEmpty)
-        XCTAssertTrue(state.setVisible(true).isEmpty)
+        XCTAssertTrue(state.setForeground(false).isEmpty)
         XCTAssertTrue(state.send(.customContext(["stale": true])).isEmpty)
 
         XCTAssertEqual(
             json(state.ready(customContext: ["screen": "cart"])),
-            json(
-                .visibility(true),
-                .appState(foreground: true),
-                .customContext(["screen": "cart"]),
-                .token(id: nil, jwt: "jwt")
-            )
+            json(.appState(foreground: false), .customContext(["screen": "cart"]), .token(id: nil, jwt: "jwt"))
         )
         XCTAssertTrue(state.isReady)
-        XCTAssertEqual(json(state.setVisible(false)), json(.visibility(false)))
+        XCTAssertEqual(json(state.setForeground(true)), json(.appState(foreground: true)))
         XCTAssertEqual(json(state.send(.customContext(nil))), [#"{"context":null,"type":"customContext","v":1}"#])
+    }
+
+    func testReportsRepliesUnlessTheChatIsOnScreenInTheForeground() {
+        var state = ChatPageState()
+        XCTAssertTrue(state.reportsReplies) // preloaded, not shown
+        state.setVisible(true)
+        XCTAssertFalse(state.reportsReplies) // the shopper is watching
+        _ = state.setForeground(false)
+        XCTAssertTrue(state.reportsReplies) // on screen, but the app is in the background
+        _ = state.setForeground(true)
+        state.setVisible(false)
+        XCTAssertTrue(state.reportsReplies) // closed
     }
 
     func testSendsNoCustomContextOnReadyWhenTheAppHasNone() {
         var state = ChatPageState()
         _ = state.startLoad()
-        XCTAssertEqual(json(state.ready(customContext: nil)), json(.visibility(false), .appState(foreground: true)))
+        XCTAssertEqual(json(state.ready(customContext: nil)), json(.appState(foreground: true)))
     }
 
     func testAnswersEachTokenRequestOnce() {
@@ -74,7 +81,7 @@ final class ChatPageStateTests: XCTestCase {
         _ = state.send(.token(id: nil, jwt: "jwt"))
         _ = state.startLoad()
         XCTAssertTrue(state.tokenAnswered("t1", jwt: "jwt", loadID: first).isEmpty)
-        XCTAssertEqual(json(state.ready(customContext: nil)), json(.visibility(false), .appState(foreground: true)))
+        XCTAssertEqual(json(state.ready(customContext: nil)), json(.appState(foreground: true)))
     }
 
     func testALoadWithoutReadyTimesOutAsAFailure() {
@@ -114,7 +121,7 @@ final class ChatPageStateTests: XCTestCase {
 
         _ = state.startLoad()
         XCTAssertFalse(state.isFailed)
-        XCTAssertEqual(json(state.ready(customContext: nil)), json(.visibility(false), .appState(foreground: true)))
+        XCTAssertEqual(json(state.ready(customContext: nil)), json(.appState(foreground: true)))
     }
 
     func testAppStateChangesAreSentOnlyWhenTheyChange() {
