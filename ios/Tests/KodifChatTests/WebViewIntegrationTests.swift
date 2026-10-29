@@ -127,9 +127,7 @@ final class WebViewIntegrationTests: XCTestCase {
         defer { session.invalidate() }
         let result = await XCTWaiter().fulfillment(of: [first], timeout: 30)
         if result != .completed {
-            // Tell a fetch that's still pending (readyState "loading") from an onerror that never reached native.
-            let state = try? await evaluate(session.webView, "document.readyState")
-            XCTFail("the failed load wasn't reported; document.readyState = \(String(describing: state))")
+            XCTFail("the failed load wasn't reported: \(await diagnoseBundleError(session))")
             return
         }
 
@@ -140,6 +138,40 @@ final class WebViewIntegrationTests: XCTestCase {
     }
 
     // MARK: Helpers
+
+    /// What WebKit does with a module script that fails to load: which error events fire, and whether the page's
+    /// handler can reach native when called directly.
+    @MainActor
+    private func diagnoseBundleError(_ session: KodifChatSession) async -> String {
+        let probe = """
+        window.__probe = [];
+        window.addEventListener('error', function (e) { __probe.push('window-capture:' + (e.target && e.target.tagName)); }, true);
+        ['module', 'text/javascript'].forEach(function (type) {
+          var s = document.createElement('script');
+          s.type = type;
+          s.onerror = function () { __probe.push(type + ':onerror'); };
+          s.onload = function () { __probe.push(type + ':onload'); };
+          s.src = 'https://127.0.0.1:1/probe-' + type.replace('/', '-') + '.js';
+          document.head.appendChild(s);
+        });
+        true
+        """
+        _ = try? await evaluate(session.webView, probe)
+        try? await Task.sleep(nanoseconds: 10_000_000_000)
+        let probed = try? await evaluate(session.webView, "JSON.stringify(window.__probe)")
+        let attribute = try? await evaluate(session.webView, "document.querySelector('script[type=module]').getAttribute('onerror')")
+        var direct = "no"
+        let reported = expectation(description: "direct handler")
+        (KodifChat.delegate as? Recorder)?.onUnavailable = {
+            direct = "yes"
+            reported.fulfill()
+        }
+        _ = try? await evaluate(session.webView, Bridge.bundleErrorHandler + "; true")
+        _ = await XCTWaiter().fulfillment(of: [reported], timeout: 5)
+        return "readyState=\(String(describing: try? await evaluate(session.webView, "document.readyState"))) "
+            + "probe=\(String(describing: probed)) onerror attribute=\(String(describing: attribute)) "
+            + "handler reaches native when called directly: \(direct)"
+    }
 
     @MainActor
     private func evaluate(_ webView: WKWebView, _ script: String) async throws -> Any? {
