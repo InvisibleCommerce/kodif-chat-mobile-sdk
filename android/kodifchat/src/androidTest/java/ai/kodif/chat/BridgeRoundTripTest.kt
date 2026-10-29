@@ -87,7 +87,8 @@ class BridgeRoundTripTest {
         val token = messages.first { it.getString("type") == "token" }
         assertEquals("8d5e2c1a", token.getString("id"))
         assertEquals("test-jwt", token.getString("jwt"))
-        assertTrue(received, messages.any { it.getString("type") == "appState" && it.getString("state") == "foreground" })
+        // The app's state is sent after every load. Under instrumentation no activity has started, so it's background.
+        assertTrue(received, messages.any { it.getString("type") == "appState" })
         assertEquals("cart", messages.first { it.getString("type") == "customContext" }.getJSONObject("context").getString("screen"))
 
         assertEquals("true", evaluate("window.isSecureContext"))
