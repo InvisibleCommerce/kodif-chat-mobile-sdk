@@ -1,6 +1,7 @@
 package ai.kodif.chat
 
 import ai.kodif.chat.Bridge.Incoming
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -56,7 +57,9 @@ class BridgeTest {
             html.substringAfter("<script>\n").trimStart()
                 .startsWith("window.KodifChatNative = { pending: [], receive: function (m) { this.pending.push(m) } };"),
         )
-        assertTrue(html.contains("<script type=\"module\" src=\"https://js.shippedsuite.com/api/chat-widget.js\" onerror=\""))
+        assertEquals("https://js.shippedsuite.com/api/chat-widget.js", bundleSource(html))
+        assertTrue(html.contains("bundle.type = 'module';"))
+        assertTrue(html.contains("document.head.appendChild(bundle);"))
         assertTrue(html.contains("viewport-fit=cover"))
         assertJson(
             """{"integrationId":"int_123","host":"android","hostCapabilities":{"microphone":true},"language":"fr"}""",
@@ -67,18 +70,22 @@ class BridgeTest {
     @Test
     fun reportsABundleThatFailsToLoad() {
         val html = Bridge.html("https://x/b.js?a=1&b=2", "i", microphone = false, language = null)
-        val handler = html.substringAfter("onerror=\"").substringBefore("\"")
-        assertEquals(Bridge.BUNDLE_ERROR_HANDLER, handler.replace("&amp;", "&"))
-        assertTrue(Bridge.BUNDLE_ERROR_HANDLER.contains("{v:1,type:'unavailable'}"))
-        assertTrue(html.contains("src=\"https://x/b.js?a=1&amp;b=2\""))
+        assertEquals("https://x/b.js?a=1&b=2", bundleSource(html))
+        val handler = html.substringAfter("bundle.onerror = function () {")
+        assertTrue(handler.contains("var m = JSON.stringify({ v: 1, type: 'unavailable' });"))
+        assertTrue(handler.contains("window.webkit.messageHandlers.kodifChat"))
+        assertTrue(handler.contains("window.kodifChat.postMessage(m)"))
+        // Set before the script is inserted, so a failure can't be missed.
+        assertTrue(html.indexOf("bundle.onerror") < html.indexOf("document.head.appendChild(bundle)"))
     }
 
     @Test
-    fun optionsCannotCloseTheScriptTag() {
-        val html = Bridge.html("https://x/b.js", "</script><!--", microphone = false, language = null)
-        assertEquals(2, Regex("</script", RegexOption.IGNORE_CASE).findAll(html).count())
+    fun valuesCannotCloseTheScriptTag() {
+        val html = Bridge.html("https://x/b.js#</script>", "</script><!--", microphone = false, language = null)
+        assertEquals(1, Regex("</script", RegexOption.IGNORE_CASE).findAll(html).count())
         assertFalse(html.contains("<!--"))
         assertEquals("</script><!--", JSONObject(optionsIn(html)).getString("integrationId"))
+        assertEquals("https://x/b.js#</script>", bundleSource(html))
     }
 
     @Test
@@ -87,6 +94,10 @@ class BridgeTest {
         assertEquals("https://js.dev.invisiblecommerce.com/api/chat-widget.js", KodifChat.Environment.Development.bundleUrl)
         assertEquals("https://example.test/stub.js", KodifChat.Environment.Custom("https://example.test/stub.js").bundleUrl)
     }
+
+    /** The bundle URL the page's script loads (a JSON string). */
+    private fun bundleSource(html: String): String =
+        JSONArray("[" + html.substringAfter("bundle.src = ").substringBefore(";\n") + "]").getString(0)
 
     private fun optionsIn(html: String) = html.substringAfter("new window.ShippedAI.ChatWidget(").substringBefore(")\n")
 

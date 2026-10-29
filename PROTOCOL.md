@@ -20,22 +20,28 @@ needs a secure context.
     window.KodifChatNative = { pending: [], receive: function (m) { this.pending.push(m) } };
     window.addEventListener('shipped:chat-script-loaded', function () {
       new window.ShippedAI.ChatWidget(OPTIONS)
-    })
+    });
+    var bundle = document.createElement('script');
+    bundle.type = 'module';
+    bundle.src = BUNDLE_URL;
+    bundle.onerror = function () { /* post {"v":1,"type":"unavailable"} to the native handler */ };
+    document.head.appendChild(bundle);
   </script>
-  <script type="module" src="BUNDLE_URL" onerror="BUNDLE_ERROR_HANDLER"></script>
 </head>
 <body></body>
 </html>
 ```
 
-- **The page buffers.** Its first script defines `window.KodifChatNative`, which collects messages in `pending`. The
+- **The page buffers.** Its script first defines `window.KodifChatNative`, which collects messages in `pending`. The
   widget replaces it when it starts and replays `pending`. So native never queues or waits: it always evaluates
   `window.KodifChatNative.receive(<message JSON>)`.
-- `OPTIONS` is JSON with `<` escaped as `<`: `integrationId` (string), `host` (`'ios'` \| `'android'`, turns on
-  mobile mode), `hostCapabilities` (`{ microphone: boolean }`, true when the app opted into voice), and an optional
-  `language` (e.g. `fr`; omitted, the widget detects it).
-- `BUNDLE_ERROR_HANDLER` (HTML-escaped) posts `{"v":1,"type":"unavailable"}` to the native handler, because a bundle
-  that fails to load (offline, a CDN error) never starts the widget.
+- `OPTIONS` is JSON: `integrationId` (string), `host` (`'ios'` \| `'android'`, turns on mobile mode),
+  `hostCapabilities` (`{ microphone: boolean }`, true when the app opted into voice), and an optional `language`
+  (e.g. `fr`; omitted, the widget detects it). `OPTIONS` and `BUNDLE_URL` (a JSON string) escape `<` as `\u003c`.
+- The bundle's `onerror` posts `{"v":1,"type":"unavailable"}` to the native handler
+  (`window.webkit.messageHandlers.kodifChat`, else `window.kodifChat`), because a bundle that fails to load (offline,
+  a CDN error) never starts the widget. The page inserts the module script itself: in WKWebView (iOS 18) a failed
+  module script written in the HTML didn't fire `error`, while one inserted from script does.
 - `BUNDLE_URL`: production `https://js.shippedsuite.com/api/chat-widget.js`, staging
   `https://js-staging.shippedsuite.com/api/chat-widget.js`, development
   `https://js.dev.invisiblecommerce.com/api/chat-widget.js`, or any URL (tests).

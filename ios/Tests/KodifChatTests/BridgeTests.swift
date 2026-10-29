@@ -57,6 +57,13 @@ final class BridgeTests: XCTestCase {
         return try object(String(html[start..<end]))
     }
 
+    /// The bundle URL the page's script loads (a JSON string).
+    private func bundleSource(in html: String) throws -> String? {
+        let start = try XCTUnwrap(html.range(of: "bundle.src = ")).upperBound
+        let end = try XCTUnwrap(html.range(of: ";\n", range: start..<html.endIndex)).lowerBound
+        return try JSONSerialization.jsonObject(with: Data(html[start..<end].utf8), options: .fragmentsAllowed) as? String
+    }
+
     func testBuildsThePage() throws {
         let html = Bridge.html(
             bundleURL: KodifChat.Environment.production.bundleURL, integrationId: "int_123", microphone: true, language: "fr"
@@ -66,7 +73,9 @@ final class BridgeTests: XCTestCase {
         XCTAssertTrue(html[firstScript...].trimmingCharacters(in: .whitespaces).hasPrefix(
             "window.KodifChatNative = { pending: [], receive: function (m) { this.pending.push(m) } };"
         ))
-        XCTAssertTrue(html.contains(#"<script type="module" src="https://js.shippedsuite.com/api/chat-widget.js" onerror=""#))
+        XCTAssertEqual(try bundleSource(in: html), "https://js.shippedsuite.com/api/chat-widget.js")
+        XCTAssertTrue(html.contains("bundle.type = 'module';"))
+        XCTAssertTrue(html.contains("document.head.appendChild(bundle);"))
         XCTAssertTrue(html.contains("viewport-fit=cover"))
 
         let options = try options(in: html)
@@ -79,19 +88,21 @@ final class BridgeTests: XCTestCase {
 
     func testReportsABundleThatFailsToLoad() throws {
         let html = Bridge.html(bundleURL: URL(string: "https://x/b.js?a=1&b=2")!, integrationId: "i", microphone: false, language: nil)
-        let attribute = try XCTUnwrap(html.range(of: #"onerror=""#)).upperBound
-        let end = try XCTUnwrap(html.range(of: "\"", range: attribute..<html.endIndex)).lowerBound
-        let handler = String(html[attribute..<end])
-        XCTAssertEqual(handler.replacingOccurrences(of: "&amp;", with: "&"), Bridge.bundleErrorHandler)
-        XCTAssertTrue(Bridge.bundleErrorHandler.contains("{v:1,type:'unavailable'}"))
-        XCTAssertTrue(html.contains(#"src="https://x/b.js?a=1&amp;b=2""#))
+        XCTAssertEqual(try bundleSource(in: html), "https://x/b.js?a=1&b=2")
+        let onerror = try XCTUnwrap(html.range(of: "bundle.onerror = function () {"))
+        let handler = html[onerror.upperBound...]
+        XCTAssertTrue(handler.contains("var m = JSON.stringify({ v: 1, type: 'unavailable' });"))
+        XCTAssertTrue(handler.contains("window.webkit.messageHandlers.kodifChat"))
+        XCTAssertTrue(handler.contains("window.kodifChat.postMessage(m)"))
+        // Set before the script is inserted, so a failure can't be missed.
+        XCTAssertLessThan(onerror.lowerBound, try XCTUnwrap(html.range(of: "document.head.appendChild(bundle)")).lowerBound)
     }
 
-    func testOptionsCannotCloseTheScriptTag() throws {
+    func testValuesCannotCloseTheScriptTag() throws {
         let html = Bridge.html(
-            bundleURL: URL(string: "https://x/b.js")!, integrationId: "</script><!--", microphone: false, language: nil
+            bundleURL: URL(string: "https://x/b.js#</script>")!, integrationId: "</script><!--", microphone: false, language: nil
         )
-        XCTAssertEqual(html.lowercased().components(separatedBy: "</script").count - 1, 2)
+        XCTAssertEqual(html.lowercased().components(separatedBy: "</script").count - 1, 1)
         XCTAssertFalse(html.contains("<!--"))
         XCTAssertEqual(try options(in: html)["integrationId"] as? String, "</script><!--")
     }

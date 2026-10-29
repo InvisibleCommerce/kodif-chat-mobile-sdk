@@ -68,12 +68,6 @@ enum Bridge {
 
     // The page.
 
-    /// The script tag's onerror: a bundle that fails to load never starts the widget, so the page reports it.
-    static let bundleErrorHandler =
-        "(function(){var m=JSON.stringify({v:1,type:'unavailable'});"
-        + "var w=window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.kodifChat;"
-        + "if(w){w.postMessage(m)}else if(window.kodifChat){window.kodifChat.postMessage(m)}})()"
-
     static func html(bundleURL: URL, integrationId: String, microphone: Bool, language: String?) -> String {
         var options: [String: Any] = [
             "integrationId": integrationId,
@@ -81,9 +75,6 @@ enum Bridge {
             "hostCapabilities": ["microphone": microphone],
         ]
         if let language { options["language"] = language }
-        let data = (try? JSONSerialization.data(withJSONObject: options, options: [.sortedKeys])) ?? Data()
-        // `<` only occurs inside JSON strings: escaping it keeps a value from closing the script tag.
-        let json = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "<", with: "\\u003c")
         return """
         <!doctype html>
         <html>
@@ -93,10 +84,20 @@ enum Bridge {
           <script>
             window.KodifChatNative = { pending: [], receive: function (m) { this.pending.push(m) } };
             window.addEventListener('shipped:chat-script-loaded', function () {
-              new window.ShippedAI.ChatWidget(\(json))
-            })
+              new window.ShippedAI.ChatWidget(\(scriptJSON(options)))
+            });
+            var bundle = document.createElement('script');
+            bundle.type = 'module';
+            bundle.src = \(scriptJSON(bundleURL.absoluteString));
+            // A bundle that fails to load never starts the widget, so the page reports it. (WKWebView fired no
+            // error for a failed module script written in the HTML; one inserted like this does.)
+            bundle.onerror = function () {
+              var m = JSON.stringify({ v: 1, type: 'unavailable' });
+              var w = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.kodifChat;
+              if (w) { w.postMessage(m) } else if (window.kodifChat) { window.kodifChat.postMessage(m) }
+            };
+            document.head.appendChild(bundle);
           </script>
-          <script type="module" src="\(escapeAttribute(bundleURL.absoluteString))" onerror="\(escapeAttribute(bundleErrorHandler))"></script>
         </head>
         <body></body>
         </html>
@@ -104,10 +105,10 @@ enum Bridge {
         """
     }
 
-    private static func escapeAttribute(_ value: String) -> String {
-        value.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
+    /// `value` as JSON inside a `<script>`: `<` only occurs inside JSON strings, so escaping it keeps a value from
+    /// closing the script tag.
+    private static func scriptJSON(_ value: Any) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .fragmentsAllowed])) ?? Data()
+        return String(decoding: data, as: UTF8.self).replacingOccurrences(of: "<", with: "\\u003c")
     }
 }
