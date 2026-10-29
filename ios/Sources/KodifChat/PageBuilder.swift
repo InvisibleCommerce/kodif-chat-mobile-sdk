@@ -10,11 +10,18 @@ enum PageBuilder {
         var integrationId: String
         var microphone: Bool
         var language: String?
-        var customContext: [String: Any]?
         var host = "ios"
     }
 
-    /// The widget options, as JSON that is safe inside a `<script>`.
+    /// Posted straight to the native handler when the bundle fails to load, so native treats it like the widget's
+    /// own `unavailable` (the widget, and so its bridge, never started). iOS's handler, else Android's.
+    static let bundleErrorHandler =
+        "(function(){var m=JSON.stringify({v:1,type:'unavailable'});"
+        + "var w=window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.kodifChat;"
+        + "if(w){w.postMessage(m)}else if(window.kodifChat){window.kodifChat.postMessage(m)}})()"
+
+    /// The widget options, as JSON that is safe inside a `<script>`. Custom context isn't one: native sends it as a
+    /// `customContext` message after `ready`, so later changes replace it rather than merge into it.
     static func optionsJSON(_ options: Options) -> String {
         var object: [String: Any] = [
             "integrationId": options.integrationId,
@@ -22,10 +29,6 @@ enum PageBuilder {
             "hostCapabilities": ["microphone": options.microphone],
         ]
         if let language = options.language { object["language"] = language }
-        if let customContext = options.customContext { object["customContext"] = customContext }
-        if let json = JSONEmbedding.encode(object) { return json }
-        // Unreachable after sanitizing; drop the app-supplied context rather than fail to start.
-        object["customContext"] = nil
         return JSONEmbedding.encode(object) ?? "{}"
     }
 
@@ -41,7 +44,7 @@ enum PageBuilder {
               new window.ShippedAI.ChatWidget(\(optionsJSON(options)))
             })
           </script>
-          <script type="module" src="\(escapeAttribute(bundleURL.absoluteString))"></script>
+          <script type="module" src="\(escapeAttribute(bundleURL.absoluteString))" onerror="\(escapeAttribute(bundleErrorHandler))"></script>
         </head>
         <body></body>
         </html>

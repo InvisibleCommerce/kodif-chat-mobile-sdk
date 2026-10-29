@@ -5,11 +5,15 @@ import WebKit
 
 let kodifChatLog = Logger(subsystem: "ai.kodif.chat", category: "KodifChat")
 
-/// The one shared chat: the web view, the bridge, and the queue of native → widget messages waiting for `ready`.
-/// ``KodifChatViewController`` borrows its web view while it's on screen.
+/// The one shared chat: the web view and its bridge (state in ``ChatPageState``). ``KodifChatViewController`` borrows
+/// its web view while it's on screen. A load that fails (the bundle doesn't load, no `ready` within
+/// ``readyTimeout``, the widget says `unavailable`) dismisses the chat and reports it; the next preload or
+/// presentation loads the page again.
 @MainActor
 final class KodifChatSession: NSObject {
     static let messageHandlerName = "kodifChat"
+    /// A load that hasn't heard `ready` by now has failed.
+    static let readyTimeout: TimeInterval = 15
 
     let configuration: KodifChat.Configuration
     private(set) var webView: WKWebView!
@@ -18,13 +22,9 @@ final class KodifChatSession: NSObject {
     /// Test hook: every message the widget posted, after decoding.
     var onIncoming: ((BridgeMessage.Incoming) -> Void)?
 
-    private var isReady = false
-    private var isVisible = false
-    private var isForeground = true
-    private var needsReload = false
+    private var state = ChatPageState()
     private var isInvalidated = false
-    private var queue: [BridgeMessage.Outgoing] = []
-    private var pendingTokenIDs: Set<String> = []
+    private var readyTimeoutTask: Task<Void, Never>?
 
     init(configuration: KodifChat.Configuration) {
         self.configuration = configuration
@@ -43,6 +43,7 @@ final class KodifChatSession: NSObject {
     /// Tears the session down; it can't be used afterwards.
     func invalidate() {
         isInvalidated = true
+        cancelReadyTimeout()
         NotificationCenter.default.removeObserver(self)
         webView.configuration.userContentController.removeScriptMessageHandler(forName: Self.messageHandlerName)
         webView.navigationDelegate = nil
@@ -58,34 +59,37 @@ final class KodifChatSession: NSObject {
     /// Hands the web view to `controller`, which is about to show it.
     func attach(_ controller: KodifChatViewController) -> WKWebView {
         hostController = controller
-        if needsReload {
-            needsReload = false
-            loadPage()
-        }
+        reloadIfFailed()
         return webView
+    }
+
+    /// Loads the page again if the last load failed.
+    func reloadIfFailed() {
+        if state.isFailed { loadPage() }
     }
 
     /// Tells the widget whether `controller`, if it's the one holding the chat, is on screen.
     func setVisible(_ visible: Bool, from controller: KodifChatViewController) {
-        guard controller === hostController, visible != isVisible else { return }
-        isVisible = visible
-        send(.visibility(visible))
+        guard controller === hostController else { return }
+        deliver(state.setVisible(visible))
     }
 
     // MARK: Native → widget
 
-    /// Sends `message` to the widget, or queues it until `ready`.
+    /// Sends `message` to the widget now, or when it's ready (see ``ChatPageState/send(_:)``).
     func send(_ message: BridgeMessage.Outgoing) {
+        deliver(state.send(message))
+    }
+
+    private func deliver(_ messages: [BridgeMessage.Outgoing]) {
         guard !isInvalidated else { return }
-        guard isReady else {
-            if message.isQueuedUntilReady { queue.append(message) }
-            return
+        for message in messages {
+            guard let json = message.json else {
+                kodifChatLog.error("Dropped a \(message.type, privacy: .public) message that couldn't be encoded as JSON")
+                continue
+            }
+            webView.evaluateJavaScript("window.KodifChatNative && window.KodifChatNative.receive(\(json))", completionHandler: nil)
         }
-        guard let json = message.json else {
-            kodifChatLog.error("Dropped a \(message.type, privacy: .public) message that couldn't be encoded as JSON")
-            return
-        }
-        webView.evaluateJavaScript("window.KodifChatNative && window.KodifChatNative.receive(\(json))", completionHandler: nil)
     }
 
     // MARK: Page
@@ -110,17 +114,39 @@ final class KodifChatSession: NSObject {
     }
 
     private func loadPage() {
-        isReady = false
-        queue.removeAll()
-        pendingTokenIDs.removeAll()
+        let loadID = state.startLoad()
         let options = PageBuilder.Options(
             integrationId: configuration.integrationId,
             microphone: KodifChat.voiceEnabled,
-            language: KodifChat.language,
-            customContext: KodifChat.customContext
+            language: KodifChat.language
         )
         let html = PageBuilder.html(bundleURL: configuration.environment.bundleURL, options: options)
         webView.loadHTMLString(html, baseURL: PageBuilder.baseURL)
+
+        cancelReadyTimeout()
+        let timeout = UInt64(Self.readyTimeout * 1_000_000_000)
+        readyTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: timeout)
+            guard !Task.isCancelled, let self, !self.isInvalidated, self.state.loadTimedOut(loadID) else { return }
+            self.onLoadFailed()
+        }
+    }
+
+    private func cancelReadyTimeout() {
+        readyTimeoutTask?.cancel()
+        readyTimeoutTask = nil
+    }
+
+    private func fail() {
+        if state.fail() { onLoadFailed() }
+    }
+
+    /// The load failed: unload the dead page, dismiss the chat, and tell the app. The next show reloads.
+    private func onLoadFailed() {
+        cancelReadyTimeout()
+        if let blank = URL(string: "about:blank") { webView.load(URLRequest(url: blank)) }
+        hostController?.dismissChat()
+        KodifChat.delegate?.kodifChatUnavailable()
     }
 
     // MARK: Widget → native
@@ -134,15 +160,13 @@ final class KodifChatSession: NSObject {
     }
 
     private func handle(_ message: BridgeMessage.Incoming) {
+        // A failed load's page is on its way out; nothing it says counts.
+        guard !state.isFailed else { return }
         onIncoming?(message)
         switch message {
         case .ready:
-            isReady = true
-            send(.visibility(isVisible))
-            send(.appState(foreground: isForeground))
-            let queued = queue
-            queue.removeAll()
-            queued.forEach { send($0) }
+            cancelReadyTimeout()
+            deliver(state.ready(customContext: KodifChat.customContext))
         case let .requestToken(id):
             requestToken(id)
         case .close:
@@ -155,15 +179,13 @@ final class KodifChatSession: NSObject {
         case .openSettings:
             if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
         case .unavailable:
-            // Start over the next time the chat is shown, in case it failed to start.
-            needsReload = true
-            hostController?.dismissChat()
-            KodifChat.delegate?.kodifChatUnavailable()
+            // Switched off for this store, or failed to start: start over the next time the chat is shown.
+            fail()
         }
     }
 
     private func requestToken(_ id: String) {
-        pendingTokenIDs.insert(id)
+        state.tokenRequested(id)
         guard let provider = KodifChat.tokenProvider else {
             answerToken(id: id, jwt: nil)
             return
@@ -175,9 +197,7 @@ final class KodifChatSession: NSObject {
     }
 
     private func answerToken(id: String, jwt: String?) {
-        // A page reload forgets pending ids, and a provider that calls back twice is answered once.
-        guard pendingTokenIDs.remove(id) != nil else { return }
-        send(.token(id: id, jwt: jwt))
+        deliver(state.tokenAnswered(id, jwt: jwt))
     }
 
     // MARK: Links
@@ -218,13 +238,11 @@ final class KodifChatSession: NSObject {
     // MARK: App state
 
     @objc private func didEnterBackground() {
-        isForeground = false
-        send(.appState(foreground: false))
+        deliver(state.setForeground(false))
     }
 
     @objc private func willEnterForeground() {
-        isForeground = true
-        send(.appState(foreground: true))
+        deliver(state.setForeground(true))
     }
 }
 

@@ -10,11 +10,22 @@ internal object PageBuilder {
         val integrationId: String,
         val microphone: Boolean,
         val language: String? = null,
-        val customContext: Map<String, Any?>? = null,
         val host: String = "android",
     )
 
-    /** The widget options, as JSON that is safe inside a `<script>`. */
+    /**
+     * Posted straight to the native handler when the bundle fails to load, so native treats it like the widget's
+     * own `unavailable` (the widget, and so its bridge, never started). iOS's handler, else Android's.
+     */
+    const val BUNDLE_ERROR_HANDLER: String =
+        "(function(){var m=JSON.stringify({v:1,type:'unavailable'});" +
+            "var w=window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.kodifChat;" +
+            "if(w){w.postMessage(m)}else if(window.kodifChat){window.kodifChat.postMessage(m)}})()"
+
+    /**
+     * The widget options, as JSON that is safe inside a `<script>`. Custom context isn't one: native sends it as a
+     * `customContext` message after `ready`, so later changes replace it rather than merge into it.
+     */
     fun optionsJson(options: Options): String {
         val fields = linkedMapOf<String, JsonElement>(
             "integrationId" to JsonPrimitive(options.integrationId),
@@ -22,7 +33,6 @@ internal object PageBuilder {
             "hostCapabilities" to JsonObject(mapOf("microphone" to JsonPrimitive(options.microphone))),
         )
         options.language?.let { fields["language"] = JsonPrimitive(it) }
-        options.customContext?.let { fields["customContext"] = JsonEmbedding.toJsonElement(it) }
         return JsonEmbedding.encode(JsonObject(fields))
     }
 
@@ -37,7 +47,7 @@ internal object PageBuilder {
         |      new window.ShippedAI.ChatWidget(${optionsJson(options)})
         |    })
         |  </script>
-        |  <script type="module" src="${escapeAttribute(bundleUrl)}"></script>
+        |  <script type="module" src="${escapeAttribute(bundleUrl)}" onerror="${escapeAttribute(BUNDLE_ERROR_HANDLER)}"></script>
         |</head>
         |<body></body>
         |</html>

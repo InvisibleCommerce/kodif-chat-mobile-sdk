@@ -62,7 +62,10 @@ public object KodifChat {
         private set
     private var lifecycleObserverAdded = false
 
-    /** Supplies the shopper's JWT when the widget asks for one. Null: the shopper is anonymous. */
+    /**
+     * Supplies the shopper's JWT, fetched from your backend, when the chat asks for one: when it starts and when a
+     * token expires. Null: the shopper is anonymous. See [TokenProvider.fetchToken].
+     */
     @JvmStatic
     public var tokenProvider: TokenProvider? = null
 
@@ -83,7 +86,8 @@ public object KodifChat {
 
     /**
      * Key/values attached to the conversation (screen, product, app version). Values must be JSON-compatible:
-     * strings, numbers, booleans, null, maps and lists. Setting it updates a chat that is already running.
+     * strings, numbers, booleans, null, maps and lists. Setting it replaces the running chat's context (null clears
+     * it); it's sent to the chat each time the chat starts.
      */
     @JvmStatic
     public var customContext: Map<String, Any?>? = null
@@ -113,8 +117,9 @@ public object KodifChat {
     }
 
     /**
-     * Pushes the shopper's login (a JWT) or logout (null) to a running chat. The [tokenProvider] still answers the
-     * widget's own requests, so keep it in sync with the shopper's state.
+     * Tells a running chat the shopper signed in or out. A JWT signs the chat in with that token directly; null
+     * starts a fresh anonymous shopper (the previous shopper's conversations are no longer reachable on this device).
+     * The [tokenProvider] still answers the chat's own requests (at start, on expiry), so keep it in step too.
      */
     @JvmStatic
     public fun setShopperToken(jwt: String?) {
@@ -162,7 +167,7 @@ public object KodifChat {
 
     private fun setForeground(foreground: Boolean) {
         isForeground = foreground
-        session?.send(BridgeMessage.Outgoing.AppState(foreground))
+        session?.setForeground(foreground)
     }
 
     internal fun post(block: () -> Unit) {

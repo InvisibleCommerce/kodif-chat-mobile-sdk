@@ -119,9 +119,9 @@ final class BridgeMessageTests: XCTestCase {
         XCTAssertEqual(try object(.token(id: nil, jwt: jwt))["jwt"] as? String, jwt)
     }
 
-    func testOnlyTokenAndCustomContextWaitForReady() {
+    func testOnlyTokensWaitForReady() {
         XCTAssertTrue(BridgeMessage.Outgoing.token(id: nil, jwt: nil).isQueuedUntilReady)
-        XCTAssertTrue(BridgeMessage.Outgoing.customContext(nil).isQueuedUntilReady)
+        XCTAssertFalse(BridgeMessage.Outgoing.customContext(nil).isQueuedUntilReady)
         XCTAssertFalse(BridgeMessage.Outgoing.visibility(true).isQueuedUntilReady)
         XCTAssertFalse(BridgeMessage.Outgoing.appState(foreground: true).isQueuedUntilReady)
     }

@@ -80,12 +80,12 @@ enum BridgeMessage {
             }
         }
 
-        /// Whether the message waits in the queue until `ready`. Visibility and app state don't: the current state
-        /// is sent on every `ready`.
+        /// Whether the message waits in the queue until `ready`. Only tokens do: visibility, app state and custom
+        /// context are state, sent as they are on every `ready`.
         var isQueuedUntilReady: Bool {
             switch self {
-            case .token, .customContext: return true
-            case .visibility, .appState: return false
+            case .token: return true
+            case .visibility, .appState, .customContext: return false
             }
         }
 

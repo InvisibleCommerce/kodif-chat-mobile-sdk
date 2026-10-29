@@ -22,7 +22,7 @@ final class PageBuilderTests: XCTestCase {
             #"<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">"#
         ))
         XCTAssertTrue(html.contains("window.addEventListener('shipped:chat-script-loaded', function () {"))
-        XCTAssertTrue(html.contains(#"<script type="module" src="https://js.shippedsuite.com/api/chat-widget.js"></script>"#))
+        XCTAssertTrue(html.contains(#"<script type="module" src="https://js.shippedsuite.com/api/chat-widget.js" onerror=""#))
         XCTAssertTrue(html.contains("<body></body>"))
     }
 
@@ -42,16 +42,34 @@ final class PageBuilderTests: XCTestCase {
             options: .init(
                 integrationId: "int_123",
                 microphone: false,
-                language: "fr",
-                customContext: ["screen": "cart", "items": 3]
+                language: "fr"
             )
         )
         let options = try options(in: html)
         XCTAssertEqual((options["hostCapabilities"] as? [String: Any])?["microphone"] as? Bool, false)
         XCTAssertEqual(options["language"] as? String, "fr")
-        let context = try XCTUnwrap(options["customContext"] as? [String: Any])
-        XCTAssertEqual(context["screen"] as? String, "cart")
-        XCTAssertEqual(context["items"] as? Int, 3)
+        XCTAssertEqual(Set(options.keys), ["integrationId", "host", "hostCapabilities", "language"])
+    }
+
+    func testReportsABundleThatFailsToLoadAsUnavailable() throws {
+        let html = PageBuilder.html(bundleURL: bundleURL, options: .init(integrationId: "i", microphone: false))
+        let tagStart = try XCTUnwrap(html.range(of: #"<script type="module""#))
+        let tagEnd = try XCTUnwrap(html.range(of: ">", range: tagStart.upperBound..<html.endIndex))
+        let tag = String(html[tagStart.lowerBound..<tagEnd.upperBound])
+        let attributeStart = try XCTUnwrap(tag.range(of: #"onerror=""#)).upperBound
+        let attributeEnd = try XCTUnwrap(tag.range(of: "\"", range: attributeStart..<tag.endIndex)).lowerBound
+        let handler = String(tag[attributeStart..<attributeEnd])
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&amp;", with: "&")
+        XCTAssertEqual(handler, PageBuilder.bundleErrorHandler)
+        // Posts the protocol's unavailable message, to iOS's handler or else Android's.
+        XCTAssertTrue(handler.contains("JSON.stringify({v:1,type:'unavailable'})"))
+        XCTAssertTrue(handler.contains("window.webkit.messageHandlers.kodifChat"))
+        XCTAssertTrue(handler.contains("window.kodifChat.postMessage(m)"))
+        // The attribute value is escaped, so its && can't be read as character references.
+        XCTAssertFalse(tag.contains("&&"))
     }
 
     func testValuesCannotBreakOutOfTheScriptTag() throws {
@@ -60,7 +78,7 @@ final class PageBuilderTests: XCTestCase {
             options: .init(
                 integrationId: "</script><script>alert(1)</script>",
                 microphone: false,
-                customContext: ["note": "<!-- </SCRIPT>"]
+                language: "<!-- </SCRIPT>"
             )
         )
         // Only the page's own two closing tags.
@@ -68,7 +86,7 @@ final class PageBuilderTests: XCTestCase {
         XCTAssertFalse(html.contains("<!--"))
         let options = try options(in: html)
         XCTAssertEqual(options["integrationId"] as? String, "</script><script>alert(1)</script>")
-        XCTAssertEqual((options["customContext"] as? [String: Any])?["note"] as? String, "<!-- </SCRIPT>")
+        XCTAssertEqual(options["language"] as? String, "<!-- </SCRIPT>")
     }
 
     func testUsesEachEnvironmentsBundle() {
@@ -84,7 +102,7 @@ final class PageBuilderTests: XCTestCase {
     func testEscapesTheBundleURLAttribute() {
         let url = URL(string: "https://example.test/b.js?a=1&b=%22x")!
         let html = PageBuilder.html(bundleURL: url, options: .init(integrationId: "i", microphone: false))
-        XCTAssertTrue(html.contains(#"src="https://example.test/b.js?a=1&amp;b=%22x""#))
+        XCTAssertTrue(html.contains(#"src="https://example.test/b.js?a=1&amp;b=%22x" onerror="#))
     }
 
     func testBaseURLIsHTTPS() {

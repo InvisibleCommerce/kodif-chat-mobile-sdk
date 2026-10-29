@@ -75,6 +75,30 @@ class BridgeRoundTripTest {
         assertEquals("\"https://appassets.androidplatform.net\"", evaluate("location.origin"))
     }
 
+    @Test
+    fun aBundleThatFailsToLoadIsReportedAndReloadedOnTheNextPreload() {
+        // .invalid never resolves, so the module script fails to load.
+        val missingBundle = "https://kodif-chat.invalid/chat-widget.js"
+        val unavailable = java.util.concurrent.LinkedBlockingQueue<Unit>()
+        instrumentation.runOnMainSync {
+            KodifChat.configure(instrumentation.targetContext, "test-integration", KodifChat.Environment.Custom(missingBundle))
+            KodifChat.listener = object : KodifChatListener {
+                override fun onUnavailable() {
+                    unavailable += Unit
+                }
+            }
+            KodifChat.preload()
+        }
+        try {
+            assertTrue("the failed load wasn't reported", unavailable.poll(30, TimeUnit.SECONDS) != null)
+            // The next preload loads the page again, and fails again.
+            instrumentation.runOnMainSync { KodifChat.preload() }
+            assertTrue("the next preload didn't reload", unavailable.poll(30, TimeUnit.SECONDS) != null)
+        } finally {
+            instrumentation.runOnMainSync { KodifChat.listener = null }
+        }
+    }
+
     private fun evaluate(script: String): String {
         val latch = CountDownLatch(1)
         var result = ""

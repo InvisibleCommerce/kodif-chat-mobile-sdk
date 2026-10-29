@@ -94,6 +94,27 @@ final class WebViewIntegrationTests: XCTestCase {
         XCTAssertEqual(incoming, [.ready])
     }
 
+    @MainActor
+    func testABundleThatFailsToLoadIsReportedAndReloaded() async throws {
+        // .invalid never resolves, so the module script fails to load and its onerror reports it.
+        let bundleURL = try XCTUnwrap(URL(string: "https://kodif-chat.invalid/chat-widget.js"))
+        let recorder = UnavailableRecorder()
+        KodifChat.delegate = recorder
+        defer { KodifChat.delegate = nil }
+
+        let first = expectation(description: "first load reported unavailable")
+        recorder.onUnavailable = { first.fulfill() }
+        let session = KodifChatSession(configuration: .init(integrationId: "i", environment: .custom(bundleURL: bundleURL)))
+        defer { session.invalidate() }
+        await fulfillment(of: [first], timeout: 30)
+
+        // The next preload / presentation loads the page again.
+        let second = expectation(description: "reload reported unavailable")
+        recorder.onUnavailable = { second.fulfill() }
+        session.reloadIfFailed()
+        await fulfillment(of: [second], timeout: 30)
+    }
+
     // MARK: Helpers
 
     @MainActor
@@ -123,5 +144,14 @@ final class WebViewIntegrationTests: XCTestCase {
             try await Task.sleep(nanoseconds: 200_000_000)
         }
         return messages
+    }
+}
+
+@MainActor
+private final class UnavailableRecorder: KodifChatDelegate {
+    var onUnavailable: (() -> Void)?
+
+    func kodifChatUnavailable() {
+        onUnavailable?()
     }
 }

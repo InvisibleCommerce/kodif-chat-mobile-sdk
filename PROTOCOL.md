@@ -21,7 +21,7 @@ mode's microphone needs a secure context. The page:
       new window.ShippedAI.ChatWidget(/* the widget options, as JSON */)
     })
   </script>
-  <script type="module" src="BUNDLE_URL"></script>
+  <script type="module" src="BUNDLE_URL" onerror="BUNDLE_ERROR_HANDLER"></script>
 </head>
 <body></body>
 </html>
@@ -33,6 +33,13 @@ bottom follows the keyboard's top, so the layout viewport shrinks as on Android)
 composer with `env(safe-area-inset-*)`. Android doesn't rely on `env()`: the SDK applies the system bar and IME insets
 (`WindowInsetsCompat.Type.systemBars()` + `ime()`) natively as padding on the WebView's container (white background),
 so the page itself sees no insets.
+
+`BUNDLE_ERROR_HANDLER` (HTML-escaped into the attribute) posts `{"v":1,"type":"unavailable"}` straight to the native
+handler (`window.webkit.messageHandlers.kodifChat`, else `window.kodifChat`), because a bundle that fails to load
+(offline, a CDN error) never starts the widget or its bridge. Native also treats a load that hasn't sent `ready`
+within 15 seconds as failed. Either way, and on the widget's own `unavailable`, native marks the page failed,
+dismisses the chat, tells the app, and loads the page again on the next preload or open (as it does when the web
+content process dies).
 
 `BUNDLE_URL` comes from the environment:
 
@@ -51,7 +58,10 @@ so the page itself sees no insets.
 | `host` | `'ios'` \| `'android'` | Required. Turns on mobile mode. |
 | `hostCapabilities` | `{ microphone: boolean }` | `microphone` is true when the app opted into voice. False hides voice mode. |
 | `language` | string? | Optional locale (e.g. `fr`). Omitted: the widget detects it. |
-| `customContext` | object? | Optional key/values attached to the conversation (screen, product, app version). |
+
+Custom context isn't a widget option: native sends it as a `customContext` message right after `ready` (when the app
+has set one), and again whenever the app changes it. The widget merges runtime context over a constructor value, so
+keys passed at construction could never be removed.
 
 In mobile mode the widget is always open and full screen, with no launcher. It never runs campaigns, and it
 never marks conversations as tests by the page's origin.
@@ -73,7 +83,7 @@ origin).
 | `openUrl` | `url: string` | The shopper tapped a link (a product card, a link in a reply, a file). Give it to the app's delegate, or open it in an in-app browser (SFSafariViewController / Custom Tabs). |
 | `message` | `preview: string`, `author: 'ai' \| 'agent'` | A reply arrived while the chat wasn't visible (see `visibility`). For an in-app badge. |
 | `openSettings` | | The microphone permission is denied. Open the app's system settings page. |
-| `unavailable` | | The chat is switched off for this store (or failed to start). Show nothing / dismiss. |
+| `unavailable` | | The chat is switched off for this store (or failed to start). Show nothing / dismiss; reload the page on the next preload or open. Also posted by the page itself when the bundle fails to load. |
 
 **Native → widget.** Native runs `window.KodifChatNative.receive(<message JSON>)` (`evaluateJavaScript` /
 `evaluateJavascript`), only after `ready`; queue anything earlier.
@@ -86,10 +96,10 @@ follow the same rule as every other native → widget message: they're sent afte
 
 | type | fields | widget does |
 |---|---|---|
-| `token` | `id?: string`, `jwt: string \| null` | Answers `requestToken` (with its `id`). Sent without `id` when the app's shopper logs in or out: the widget logs in again with it (`null` = anonymous). |
+| `token` | `id?: string`, `jwt: string \| null` | Answers `requestToken` (with its `id`). Sent without `id` when the app's shopper logs in or out: a JWT signs the widget in with that token directly (it doesn't send `requestToken` again); `null` starts a fresh anonymous shopper, so the previous shopper's conversations are no longer reachable on the device. |
 | `visibility` | `visible: boolean` | Whether the chat UI is on screen. The SDK keeps one preloaded WebView, so the widget can be alive but not shown. |
 | `appState` | `state: 'foreground' \| 'background'` | In the background the widget leaves an ongoing voice call (it rejoins on foreground, if the call is still going). |
-| `customContext` | `context: object \| null` | Replaces the conversation's custom context. |
+| `customContext` | `context: object \| null` | Replaces the conversation's custom context (`null` clears it). Native sends it right after `ready` when the app has set one, and whenever the app changes it. |
 
 ## Versioning
 

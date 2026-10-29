@@ -2,7 +2,6 @@ package ai.kodif.chat
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -31,7 +30,7 @@ class PageBuilderTest {
             ),
         )
         assertTrue(html.contains("window.addEventListener('shipped:chat-script-loaded', function () {"))
-        assertTrue(html.contains("<script type=\"module\" src=\"https://js.shippedsuite.com/api/chat-widget.js\"></script>"))
+        assertTrue(html.contains("<script type=\"module\" src=\"https://js.shippedsuite.com/api/chat-widget.js\" onerror=\""))
         assertTrue(html.contains("<body></body>"))
     }
 
@@ -54,16 +53,27 @@ class PageBuilderTest {
                 integrationId = "int_123",
                 microphone = false,
                 language = "fr",
-                customContext = mapOf("screen" to "cart", "items" to 3),
             ),
         )
         val options = optionsIn(html)
         assertFalse(options["hostCapabilities"]!!.jsonObject["microphone"]!!.jsonPrimitive.boolean)
         assertEquals("fr", options["language"]!!.jsonPrimitive.content)
-        assertEquals(
-            JsonObject(mapOf("screen" to JsonPrimitive("cart"), "items" to JsonPrimitive(3))),
-            options["customContext"],
-        )
+        assertEquals(setOf("integrationId", "host", "hostCapabilities", "language"), options.keys)
+    }
+
+    @Test
+    fun reportsABundleThatFailsToLoadAsUnavailable() {
+        val html = PageBuilder.html("https://x/b.js", PageBuilder.Options(integrationId = "i", microphone = false))
+        val tag = Regex("<script type=\"module\"[^>]*>").find(html)!!.value
+        val handler = Regex("onerror=\"([^\"]*)\"").find(tag)!!.groupValues[1]
+            .replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+        assertEquals(PageBuilder.BUNDLE_ERROR_HANDLER, handler)
+        // Posts the protocol's unavailable message, to iOS's handler or else Android's.
+        assertTrue(handler.contains("JSON.stringify({v:1,type:'unavailable'})"))
+        assertTrue(handler.contains("window.webkit.messageHandlers.kodifChat"))
+        assertTrue(handler.contains("window.kodifChat.postMessage(m)"))
+        // The attribute value is escaped, so its && can't be read as character references.
+        assertFalse(tag.contains("&&"))
     }
 
     @Test
@@ -73,7 +83,7 @@ class PageBuilderTest {
             PageBuilder.Options(
                 integrationId = "</script><script>alert(1)</script>",
                 microphone = false,
-                customContext = mapOf("note" to "<!-- </SCRIPT>"),
+                language = "<!-- </SCRIPT>",
             ),
         )
         // The page's own two closing tags only.
@@ -81,7 +91,7 @@ class PageBuilderTest {
         assertFalse(html.contains("<!--"))
         val options = optionsIn(html)
         assertEquals("</script><script>alert(1)</script>", options["integrationId"]!!.jsonPrimitive.content)
-        assertEquals("<!-- </SCRIPT>", options["customContext"]!!.jsonObject["note"]!!.jsonPrimitive.content)
+        assertEquals("<!-- </SCRIPT>", options["language"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -98,6 +108,6 @@ class PageBuilderTest {
             "https://example.test/b.js?a=1&b=\"><script>",
             PageBuilder.Options(integrationId = "i", microphone = false),
         )
-        assertTrue(html.contains("src=\"https://example.test/b.js?a=1&amp;b=&quot;&gt;&lt;script&gt;\""))
+        assertTrue(html.contains("src=\"https://example.test/b.js?a=1&amp;b=&quot;&gt;&lt;script&gt;\" onerror="))
     }
 }

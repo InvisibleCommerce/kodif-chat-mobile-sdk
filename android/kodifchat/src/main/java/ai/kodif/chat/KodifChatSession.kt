@@ -9,6 +9,8 @@ import android.content.Intent
 import android.content.MutableContextWrapper
 import android.graphics.Color
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.ViewGroup
@@ -29,8 +31,10 @@ import androidx.webkit.WebViewFeature
 import java.io.ByteArrayInputStream
 
 /**
- * The one shared chat: the WebView, the bridge, and the queue of native → widget messages waiting for `ready`.
- * The WebView lives on the application context and is reparented into whichever [ChatHost] shows it. Main thread only.
+ * The one shared chat: the WebView and its bridge (state in [ChatPageState]). The WebView lives on the application
+ * context and is reparented into whichever [ChatHost] shows it. A load that fails (the bundle doesn't load, no
+ * `ready` within [READY_TIMEOUT_MS], the widget says `unavailable`) dismisses the chat and reports it; the next
+ * [preload] or [attach] loads the page again. Main thread only.
  */
 @MainThread
 internal class KodifChatSession(
@@ -44,13 +48,11 @@ internal class KodifChatSession(
         private set
     private val contextWrapper = MutableContextWrapper(appContext)
     private var host: ChatHost? = null
-    private var isReady = false
-    private var isVisible = false
-    private var needsReload = false
+    private val state = ChatPageState().apply { setForeground(KodifChat.isForeground) }
     private var pageHtml = ""
-    private val queue = ArrayDeque<BridgeMessage.Outgoing>()
-    private val pendingTokenIds = mutableSetOf<String>()
     private var isDestroyed = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var readyTimeout: Runnable? = null
 
     private val assetLoader = WebViewAssetLoader.Builder()
         .setDomain(ASSET_HOST)
@@ -80,27 +82,29 @@ internal class KodifChatSession(
 
     fun preload() {
         if (!bridgeSupported) {
-            KodifChat.post { handle(BridgeMessage.Incoming.Unavailable) }
+            KodifChat.post { KodifChat.listener?.onUnavailable() }
             return
         }
-        if (webView == null) createWebView()
+        val view = webView
+        if (view == null) createWebView() else if (state.isFailed) loadPage(view)
     }
 
     /** Shows the chat in [container], taking the WebView from wherever it was. */
     fun attach(host: ChatHost, container: ViewGroup) {
         if (!bridgeSupported) {
             // Dismiss the host that's showing up, once it has finished starting.
-            KodifChat.post { handle(BridgeMessage.Incoming.Unavailable) }
+            KodifChat.post {
+                host.dismiss()
+                KodifChat.listener?.onUnavailable()
+            }
             return
         }
         if (this.host !== host) this.host?.cancelPending()
         this.host = host
         host.activity?.let { contextWrapper.baseContext = it }
-        if (needsReload) {
-            needsReload = false
-            webView?.let { loadPage(it) }
-        }
-        val view = webView ?: createWebView()
+        val existing = webView
+        if (existing != null && state.isFailed) loadPage(existing)
+        val view = existing ?: createWebView()
         if (view.parent === container) return
         (view.parent as? ViewGroup)?.removeView(view)
         container.addView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -118,26 +122,28 @@ internal class KodifChatSession(
     /** Tells the widget whether [host], if it's the one holding the chat, is on screen. */
     fun setVisible(host: ChatHost, visible: Boolean) {
         if (this.host !== host) return
-        if (isVisible == visible) return
-        isVisible = visible
-        send(BridgeMessage.Outgoing.Visibility(visible))
+        deliver(state.setVisible(visible))
     }
 
-    /**
-     * Sends [message] to the widget, or queues it until `ready`. Visibility and app state aren't queued: the
-     * current state is sent on every `ready`.
-     */
+    fun setForeground(foreground: Boolean) {
+        deliver(state.setForeground(foreground))
+    }
+
+    /** Sends [message] to the widget now, or when it's ready (see [ChatPageState.send]). */
     fun send(message: BridgeMessage.Outgoing) {
-        val view = webView
-        if (isReady && view != null) {
+        deliver(state.send(message))
+    }
+
+    private fun deliver(messages: List<BridgeMessage.Outgoing>) {
+        val view = webView ?: return
+        for (message in messages) {
             view.evaluateJavascript("window.KodifChatNative && window.KodifChatNative.receive(${message.toJson()})", null)
-        } else if (message is BridgeMessage.Outgoing.Token || message is BridgeMessage.Outgoing.CustomContext) {
-            queue.addLast(message)
         }
     }
 
     fun destroy() {
         isDestroyed = true
+        cancelReadyTimeout()
         host?.cancelPending()
         host = null
         webView?.let { destroyWebView(it) }
@@ -179,19 +185,36 @@ internal class KodifChatSession(
     }
 
     private fun loadPage(view: WebView) {
-        isReady = false
-        queue.clear()
-        pendingTokenIds.clear()
+        val loadId = state.startLoad()
         pageHtml = PageBuilder.html(
             configuration.environment.bundleUrl,
             PageBuilder.Options(
                 integrationId = configuration.integrationId,
                 microphone = KodifChat.voiceEnabled,
                 language = KodifChat.language,
-                customContext = KodifChat.customContext,
             ),
         )
         view.loadUrl(PAGE_URL)
+        cancelReadyTimeout()
+        readyTimeout = Runnable { if (!isDestroyed && state.loadTimedOut(loadId)) onLoadFailed() }
+            .also { mainHandler.postDelayed(it, READY_TIMEOUT_MS) }
+    }
+
+    private fun cancelReadyTimeout() {
+        readyTimeout?.let { mainHandler.removeCallbacks(it) }
+        readyTimeout = null
+    }
+
+    private fun fail() {
+        if (state.fail()) onLoadFailed()
+    }
+
+    /** The load failed: unload the dead page, dismiss the chat, and tell the app. The next show reloads. */
+    private fun onLoadFailed() {
+        cancelReadyTimeout()
+        webView?.loadUrl("about:blank")
+        host?.dismiss()
+        KodifChat.listener?.onUnavailable()
     }
 
     private fun destroyWebView(view: WebView) {
@@ -215,7 +238,8 @@ internal class KodifChatSession(
     // region Incoming messages
 
     private fun handle(message: BridgeMessage.Incoming) {
-        if (isDestroyed) return
+        // A failed load's page is on its way out; nothing it says counts.
+        if (isDestroyed || state.isFailed) return
         onIncoming?.invoke(message)
         val listener = KodifChat.listener
         when (message) {
@@ -228,24 +252,18 @@ internal class KodifChatSession(
             is BridgeMessage.Incoming.OpenUrl -> openUrl(message.url)
             is BridgeMessage.Incoming.Message -> listener?.onMessage(message.preview, message.author)
             BridgeMessage.Incoming.OpenSettings -> openSettings()
-            BridgeMessage.Incoming.Unavailable -> {
-                // Start over the next time the chat is shown, in case it failed to start.
-                needsReload = true
-                host?.dismiss()
-                listener?.onUnavailable()
-            }
+            // Switched off for this store, or failed to start: start over the next time the chat is shown.
+            BridgeMessage.Incoming.Unavailable -> fail()
         }
     }
 
     private fun onReady() {
-        isReady = true
-        send(BridgeMessage.Outgoing.Visibility(isVisible))
-        send(BridgeMessage.Outgoing.AppState(KodifChat.isForeground))
-        while (queue.isNotEmpty()) send(queue.removeFirst())
+        cancelReadyTimeout()
+        deliver(state.ready(KodifChat.customContext))
     }
 
     private fun requestToken(id: String) {
-        pendingTokenIds += id
+        state.tokenRequested(id)
         val provider = KodifChat.tokenProvider
         if (provider == null) {
             answerToken(id, null)
@@ -260,9 +278,7 @@ internal class KodifChatSession(
     }
 
     private fun answerToken(id: String, jwt: String?) {
-        // A page reload clears the pending ids, and a provider that calls back twice is answered once.
-        if (isDestroyed || !pendingTokenIds.remove(id)) return
-        send(BridgeMessage.Outgoing.Token(id, jwt))
+        if (!isDestroyed) deliver(state.tokenAnswered(id, jwt))
     }
 
     private fun openUrl(url: String) {
@@ -366,5 +382,8 @@ internal class KodifChatSession(
         const val PAGE_URL = "$ORIGIN$PAGE_PATH_PREFIX$PAGE_FILE"
         const val BRIDGE_NAME = "kodifChat"
         val EXTERNAL_SCHEMES = setOf("mailto", "tel", "sms", "smsto", "geo")
+
+        /** A load that hasn't heard `ready` by now has failed. */
+        const val READY_TIMEOUT_MS = 15_000L
     }
 }

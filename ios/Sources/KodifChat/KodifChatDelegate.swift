@@ -13,7 +13,8 @@ public protocol KodifChatDelegate: AnyObject {
     /// A reply arrived while the chat wasn't on screen, for an in-app badge.
     func kodifChat(didReceiveMessage preview: String, author: KodifChat.Author)
 
-    /// The chat is switched off for this store, or failed to start. It has been dismissed.
+    /// The chat is switched off for this store, or failed to start (it didn't load, e.g. offline). It has been
+    /// dismissed; the next ``KodifChat/preload()`` or presentation tries again.
     func kodifChatUnavailable()
 }
 

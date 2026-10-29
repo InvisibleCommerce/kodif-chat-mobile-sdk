@@ -20,12 +20,15 @@ public enum KodifChat {
         configuration = newConfiguration
     }
 
-    /// Supplies the shopper's JWT when the widget asks for one: sign it on your backend with the secret from the
-    /// Custom Authentication tab of your web chat settings. Nil (the default): the shopper is anonymous.
+    /// Supplies the shopper's JWT when the chat asks for one (when it starts and when a token expires). Fetch it from
+    /// your backend, which signs it with its own private key (RS256 or ES256); the public key (or a JWKS URL) goes on
+    /// the Custom Authentication tab of your web chat settings. Never mint tokens in the app. Nil (the default): the
+    /// shopper is anonymous.
     public static var tokenProvider: TokenProvider?
 
-    /// Pushes the shopper's login (a JWT) or logout (nil) to a running chat. ``tokenProvider`` still answers the
-    /// widget's own requests, so keep it in sync with the shopper's state.
+    /// Tells a running chat the shopper signed in or out. A JWT signs the chat in with that token directly; nil starts
+    /// a fresh anonymous shopper (the previous shopper's conversations are no longer reachable on this device).
+    /// ``tokenProvider`` still answers the chat's own requests (at start, on expiry), so keep it in step too.
     public static func setShopperToken(_ jwt: String?) {
         session?.send(.token(id: nil, jwt: jwt))
     }
@@ -38,7 +41,8 @@ public enum KodifChat {
     public static var language: String?
 
     /// Key/values attached to the conversation (screen, product, app version). Values should be JSON-compatible
-    /// (strings, numbers, booleans, `NSNull`, arrays and dictionaries). Setting it updates a chat that's running.
+    /// (strings, numbers, booleans, `NSNull`, arrays and dictionaries). Setting it replaces the running chat's context
+    /// (nil clears it); it's sent to the chat each time the chat starts.
     public static var customContext: [String: Any]? {
         didSet { session?.send(.customContext(customContext)) }
     }
@@ -53,7 +57,7 @@ public enum KodifChat {
 
     /// Starts the chat in the background, so presenting it later is instant.
     public static func preload() {
-        _ = sharedSession()
+        sharedSession()?.reloadIfFailed()
     }
 
     /// Presents the chat full screen from `presenter`. Does nothing if the chat is already on screen.

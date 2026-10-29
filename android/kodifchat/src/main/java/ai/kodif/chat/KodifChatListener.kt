@@ -14,15 +14,19 @@ public interface KodifChatListener {
     /** A reply arrived while the chat wasn't on screen, for an in-app badge. */
     public fun onMessage(preview: String, author: KodifChat.Author) {}
 
-    /** The chat is switched off for this store, or failed to start. The chat UI has been dismissed. */
+    /**
+     * The chat is switched off for this store, or failed to start (it didn't load, e.g. offline). The chat UI has
+     * been dismissed; the next [KodifChat.preload] or [KodifChat.open] tries again.
+     */
     public fun onUnavailable() {}
 }
 
 /** Supplies the signed-in shopper's JWT. */
 public fun interface TokenProvider {
     /**
-     * Fetch the shopper's JWT (signed with the secret from the Custom Authentication tab of your web chat settings)
-     * and pass it to [callback], from any thread. Pass null for an anonymous shopper.
+     * Fetch a JWT for the signed-in shopper from your backend, and pass it to [callback], from any thread; pass null
+     * for an anonymous shopper. Your backend signs it with its own private key (RS256 or ES256), and the public key
+     * (or a JWKS URL) goes on the Custom Authentication tab of your web chat settings. Never mint tokens in the app.
      */
     public fun fetchToken(callback: (String?) -> Unit)
 }
