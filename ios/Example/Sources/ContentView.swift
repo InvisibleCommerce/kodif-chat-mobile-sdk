@@ -2,16 +2,16 @@ import KodifChat
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var events = ChatEvents()
+    @StateObject private var chat = ChatEvents()
     @State private var showChat = false
 
     var body: some View {
         VStack(spacing: 16) {
-            if let badge = events.badge {
-                Text(badge).font(.footnote).foregroundColor(.secondary)
+            if let status = chat.status {
+                Text(status).font(.footnote).foregroundColor(.secondary)
             }
-            Button("Chat with us") {
-                events.badge = nil
+            Button(chat.unreadCount > 0 ? "Chat with us (\(chat.unreadCount))" : "Chat with us") {
+                chat.status = nil
                 showChat = true
             }
             .buttonStyle(.borderedProminent)
@@ -21,7 +21,8 @@ struct ContentView: View {
             KodifChatView().ignoresSafeArea()
         }
         .onAppear {
-            KodifChat.delegate = events
+            KodifChat.delegate = chat
+            chat.unreadCount = KodifChat.unreadCount
             // From the first screen, not at launch: the chat starts once this screen is up.
             KodifChat.preload()
         }
@@ -30,13 +31,14 @@ struct ContentView: View {
 
 @MainActor
 final class ChatEvents: ObservableObject, KodifChatDelegate {
-    @Published var badge: String?
+    @Published var unreadCount = 0
+    @Published var status: String?
 
-    func kodifChat(didReceiveMessage preview: String, author: KodifChat.Author) {
-        badge = "New reply: \(preview)"
+    func kodifChat(unreadCountDidChange count: Int) {
+        unreadCount = count
     }
 
     func kodifChatUnavailable() {
-        badge = "Chat is unavailable"
+        status = "Chat is unavailable"
     }
 }

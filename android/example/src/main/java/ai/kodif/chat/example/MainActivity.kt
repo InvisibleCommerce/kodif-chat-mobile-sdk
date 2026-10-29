@@ -11,22 +11,25 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        val badge = findViewById<TextView>(R.id.badge)
+        val status = findViewById<TextView>(R.id.status)
+        val openChat = findViewById<Button>(R.id.open_chat)
+        fun showUnread(count: Int) {
+            openChat.text = if (count > 0) "Chat with us ($count)" else "Chat with us"
+        }
 
         KodifChat.listener = object : KodifChatListener {
-            override fun onMessage(preview: String, author: KodifChat.Author) {
-                badge.text = "New reply: $preview"
-            }
+            override fun onUnreadCountChanged(count: Int) = showUnread(count)
 
             override fun onUnavailable() {
-                badge.text = "Chat is unavailable"
+                status.text = "Chat is unavailable"
             }
         }
+        showUnread(KodifChat.unreadCount)
         // From the first screen, not at launch: the chat starts once the main thread is idle.
         KodifChat.preload()
 
-        findViewById<Button>(R.id.open_chat).setOnClickListener {
-            badge.text = ""
+        openChat.setOnClickListener {
+            status.text = ""
             KodifChat.open(this)
         }
     }

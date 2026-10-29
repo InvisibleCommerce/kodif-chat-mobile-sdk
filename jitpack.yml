@@ -1,4 +1,4 @@
-# JitPack builds tags: com.github.InvisibleCommerce:kodif-chat-mobile:<tag>
+# JitPack builds tags: com.github.InvisibleCommerce:kodif-chat-mobile-sdk:<tag>
 jdk:
   - openjdk17
 install:

@@ -2,7 +2,7 @@
 
 Kodif Chat puts your store's Kodif chat in your mobile app. It's a thin native wrapper around the same chat widget
 that runs on your website: the widget runs full screen in a web view, and the SDK connects it to your app for
-sign-in, links, voice mode, attachments, and unread-reply notifications.
+sign-in, links, voice mode, attachments, and an unread-reply count.
 
 - iOS 15+, Swift Package Manager: `KodifChat`
 - Android 7.0+ (API 24): `ai.kodif:chat`
@@ -26,23 +26,23 @@ for them, which **your backend** issues:
 - A token that's missing, expired or fails verification doesn't sign anyone in: the chat carries on as an anonymous
   shopper.
 
-In the app, the **token provider** fetches the current shopper's token from your backend when the chat asks for one
-(when it starts, and again when a token expires). When the shopper signs in or out while the chat is running,
-`setShopperToken` tells the chat right away: a JWT signs the chat in with that token directly, and `nil` / `null`
-starts a fresh anonymous shopper (the previous shopper's conversations are no longer reachable on the device). Keep
-the token provider in step with the shopper's state too, since it answers every request the chat makes.
+In the app, the **token provider** fetches the current shopper's token from your backend whenever the chat asks for
+one (when it starts, and again when a token expires). When the shopper signs in or out, call
+`KodifChat.shopperChanged()`: it asks the token provider, and restarts the chat with the new shopper. If the provider
+returns no token (the shopper signed out), the chat first forgets the previous shopper by clearing its data on the
+device, so their conversations aren't shown to whoever uses the app next.
 
 ## iOS
 
 ### Install
 
-In Xcode, choose **File → Add Package Dependencies…**, enter `https://github.com/InvisibleCommerce/kodif-chat-mobile`,
+In Xcode, choose **File → Add Package Dependencies…**, enter `https://github.com/InvisibleCommerce/kodif-chat-mobile-sdk`,
 and add the `KodifChat` product to your app. In `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/InvisibleCommerce/kodif-chat-mobile", from: "0.1.0"),
+.package(url: "https://github.com/InvisibleCommerce/kodif-chat-mobile-sdk", from: "0.1.0"),
 // ...
-.product(name: "KodifChat", package: "kodif-chat-mobile"),
+.product(name: "KodifChat", package: "kodif-chat-mobile-sdk"),
 ```
 
 ### Configure and show the chat
@@ -94,11 +94,10 @@ KodifChat.tokenProvider = { completion in
 }
 ```
 
-When the shopper signs in or out while the chat is running, tell it:
+After the shopper signs in or out:
 
 ```swift
-KodifChat.setShopperToken(jwt) // after sign-in: the chat signs in with this token
-KodifChat.setShopperToken(nil) // after sign-out: a fresh anonymous shopper
+KodifChat.shopperChanged()
 ```
 
 ### Voice mode
@@ -131,9 +130,9 @@ final class ChatEvents: KodifChatDelegate {
     // The shopper closed the chat.
     func kodifChatDidClose() {}
 
-    // A reply arrived while the shopper wasn't looking (the chat isn't on screen, or the app is in the
-    // background): show a badge.
-    func kodifChat(didReceiveMessage preview: String, author: KodifChat.Author) {}
+    // KodifChat.unreadCount changed: replies that arrived while the shopper wasn't looking (the chat off
+    // screen, or the app in the background). Showing the chat resets it to 0. Use it for a badge.
+    func kodifChat(unreadCountDidChange count: Int) {}
 
     // The chat is switched off for your store, or failed to start (e.g. offline). It has been dismissed;
     // the next preload or presentation tries again.
@@ -171,7 +170,7 @@ dependencyResolutionManagement {
 
 // app/build.gradle.kts
 dependencies {
-    implementation("com.github.InvisibleCommerce:kodif-chat-mobile:0.1.0")
+    implementation("com.github.InvisibleCommerce:kodif-chat-mobile-sdk:0.1.0")
 }
 ```
 
@@ -205,8 +204,7 @@ KodifChat.tokenProvider = TokenProvider { callback ->
     myBackend.fetchChatToken { jwt -> callback(jwt) }
 }
 
-KodifChat.setShopperToken(jwt)  // after sign-in, while the chat is running: the chat signs in with this token
-KodifChat.setShopperToken(null) // after sign-out: a fresh anonymous shopper
+KodifChat.shopperChanged() // after the shopper signs in or out
 ```
 
 ### Voice mode
@@ -238,12 +236,13 @@ be granted, and the SDK asks for it when the picker opens. Photos are shared wit
 KodifChat.listener = object : KodifChatListener {
     override fun onOpenUrl(url: String): Boolean = false // true if you handled it; false opens a Custom Tab
     override fun onClose() {}
-    override fun onMessage(preview: String, author: KodifChat.Author) {} // a reply the shopper wasn't looking at
+    override fun onUnreadCountChanged(count: Int) {} // KodifChat.unreadCount changed: for a badge
     override fun onUnavailable() {} // switched off for your store, or failed to start (e.g. offline); dismissed
 }
 ```
 
-Every method is optional. The listener is held strongly, so set it from something that outlives the chat (your
+Every method is optional. `KodifChat.unreadCount` counts the replies that arrived while the shopper wasn't looking (the
+chat off screen, or the app in the background); showing the chat resets it to 0. The listener is held strongly, so set it from something that outlives the chat (your
 `Application`), or set it back to `null` in the owning activity's `onDestroy`.
 
 ### Other options
@@ -258,8 +257,8 @@ KodifChat.configure(context, "…", KodifChat.Environment.Staging) // Production
 
 The SDK keeps one web view for the chat, loads a small page that starts the Kodif chat widget in mobile mode, and
 reuses it every time the chat opens, so a conversation (and a voice call) survives closing and reopening the chat.
-If the chat can't start (the widget doesn't load, e.g. offline, or doesn't come up within 15 seconds), the SDK
-dismisses it and reports it as unavailable, and the next preload or open loads it again.
+If the chat can't start (e.g. offline), the SDK dismisses it and reports it as unavailable, and the next preload or
+open loads it again.
 The widget and the native code talk through a small, versioned message protocol: see [PROTOCOL.md](PROTOCOL.md).
 
 ## Development

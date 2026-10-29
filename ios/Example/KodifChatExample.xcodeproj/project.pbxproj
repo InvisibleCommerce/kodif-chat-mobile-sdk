@@ -15,7 +15,7 @@
 /* Begin PBXFileReference section */
 		016F53BEFAF42CDE7154A70F /* KodifChatExample.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = KodifChatExample.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1C37E221D7054EE0F3266064 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		583B2A86B26B8427E50B38B0 /* kodif-chat-mobile */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "kodif-chat-mobile"; path = ../..; sourceTree = SOURCE_ROOT; };
+		5200A113C435E2042D42E482 /* kodif-chat-mobile-sdk */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "kodif-chat-mobile-sdk"; path = ../..; sourceTree = SOURCE_ROOT; };
 		EF3BEEA0CE371B0739ECD4FE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F8AF90F00D3B3AB136420169 /* ExampleApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExampleApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -62,7 +62,7 @@
 		F8C53F905D7866BE6272F125 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				583B2A86B26B8427E50B38B0 /* kodif-chat-mobile */,
+				5200A113C435E2042D42E482 /* kodif-chat-mobile-sdk */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
