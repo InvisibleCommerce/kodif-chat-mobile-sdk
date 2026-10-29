@@ -16,16 +16,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: "16"
+      # The runner's default Xcode, with whichever iPhone simulator it has installed (names change between images).
+      - name: Pick an iPhone simulator
+        id: simulator
+        run: |
+          udid=$(xcrun simctl list devices available -j | python3 -c 'import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          print(next(d["udid"] for runtime, ds in sorted(devices.items(), reverse=True) if "iOS" in runtime
+                     for d in ds if d["name"].startswith("iPhone")))')
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
 
       - name: Test KodifChat
         run: |
           set -o pipefail
           xcodebuild test \
             -scheme KodifChat \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination 'id=${{ steps.simulator.outputs.udid }}' \
             -resultBundlePath build/KodifChatTests.xcresult
 
       - name: Build the example app
