@@ -17,7 +17,6 @@ struct ExampleApp: App {
         KodifChat.customContext = ["app": "kodif-chat-example"]
         // Anonymous shopper. A signed-in app fetches a JWT signed by its backend here:
         // KodifChat.tokenProvider = { completion in MyBackend.chatToken { completion($0) } }
-        KodifChat.preload()
     }
 
     var body: some Scene {

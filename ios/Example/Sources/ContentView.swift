@@ -20,7 +20,11 @@ struct ContentView: View {
         .fullScreenCover(isPresented: $showChat) {
             KodifChatView().ignoresSafeArea()
         }
-        .onAppear { KodifChat.delegate = events }
+        .onAppear {
+            KodifChat.delegate = events
+            // From the first screen, not at launch: the chat starts once this screen is up.
+            KodifChat.preload()
+        }
     }
 }
 

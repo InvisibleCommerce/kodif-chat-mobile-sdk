@@ -54,7 +54,10 @@ import KodifChat
 
 // At launch (application(_:didFinishLaunchingWithOptions:) or your App's init):
 KodifChat.configure(integrationId: "YOUR_INTEGRATION_ID")
-KodifChat.preload() // optional: starts the chat in the background so it opens instantly
+
+// Optional, from your first screen (e.g. viewDidAppear / .onAppear), not at launch: starts the chat in the
+// background so it opens instantly. It waits for the next turn of the main run loop, so it doesn't hold up the screen.
+KodifChat.preload()
 
 // UIKit
 KodifChat.present(from: viewController)
@@ -121,14 +124,15 @@ Shoppers can attach photos and files. Add these to your Info.plist so they can u
 
 ```swift
 final class ChatEvents: KodifChatDelegate {
-    // A link was tapped. Return true if you handled it (e.g. a deep link to a product screen);
-    // false opens it in an in-app Safari view.
+    // A link was tapped (any link that leaves the chat, including ones that open a new window). Return true if
+    // you handled it (e.g. a deep link to a product screen); false opens it in an in-app Safari view.
     func kodifChat(openURL url: URL) -> Bool { false }
 
     // The shopper closed the chat.
     func kodifChatDidClose() {}
 
-    // A reply arrived while the chat wasn't on screen: show a badge.
+    // A reply arrived while the shopper wasn't looking (the chat isn't on screen, or the app is in the
+    // background): show a badge.
     func kodifChat(didReceiveMessage preview: String, author: KodifChat.Author) {}
 
     // The chat is switched off for your store, or failed to start (e.g. offline). It has been dismissed;
@@ -178,7 +182,10 @@ Maven Central (`ai.kodif:chat:<version>`) is coming soon.
 ```kotlin
 // Application.onCreate
 KodifChat.configure(this, "YOUR_INTEGRATION_ID")
-KodifChat.preload() // optional: starts the chat in the background so it opens instantly
+
+// Optional, from your first screen (e.g. its onCreate), not at launch: starts the chat in the background so it
+// opens instantly. The WebView is created once the main thread is idle, so it doesn't hold up the screen.
+KodifChat.preload()
 
 // From an activity
 KodifChat.open(this)
@@ -231,12 +238,13 @@ be granted, and the SDK asks for it when the picker opens. Photos are shared wit
 KodifChat.listener = object : KodifChatListener {
     override fun onOpenUrl(url: String): Boolean = false // true if you handled it; false opens a Custom Tab
     override fun onClose() {}
-    override fun onMessage(preview: String, author: KodifChat.Author) {} // a reply arrived while the chat was hidden
+    override fun onMessage(preview: String, author: KodifChat.Author) {} // a reply the shopper wasn't looking at
     override fun onUnavailable() {} // switched off for your store, or failed to start (e.g. offline); dismissed
 }
 ```
 
-Every method is optional. The listener is held strongly: set it to null when its owner goes away.
+Every method is optional. The listener is held strongly, so set it from something that outlives the chat (your
+`Application`), or set it back to `null` in the owning activity's `onDestroy`.
 
 ### Other options
 

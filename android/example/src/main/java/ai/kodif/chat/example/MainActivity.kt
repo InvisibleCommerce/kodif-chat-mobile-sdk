@@ -22,6 +22,7 @@ class MainActivity : AppCompatActivity() {
                 badge.text = "Chat is unavailable"
             }
         }
+        // From the first screen, not at launch: the chat starts once the main thread is idle.
         KodifChat.preload()
 
         findViewById<Button>(R.id.open_chat).setOnClickListener {
@@ -32,6 +33,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // The listener is held strongly; don't leak this activity.
         KodifChat.listener = null
     }
 }
