@@ -25,6 +25,15 @@ final class WebViewIntegrationTests: XCTestCase {
     window.dispatchEvent(new Event('shipped:chat-script-loaded'));
     """
 
+    /// KodifChat's settings and unread count are static: start every test from a clean slate.
+    @MainActor
+    private func resetChat() {
+        KodifChat.delegate = nil
+        KodifChat.tokenProvider = nil
+        KodifChat.customContext = nil
+        KodifChat.unreadCount = 0
+    }
+
     @MainActor
     private func makeSession(bundle: String) throws -> KodifChatSession {
         let url = try XCTUnwrap(URL(string: "data:text/javascript;base64," + Data(bundle.utf8).base64EncodedString()))
@@ -33,16 +42,12 @@ final class WebViewIntegrationTests: XCTestCase {
 
     @MainActor
     func testTokenRoundTripStateAndUnreadCount() async throws {
+        resetChat()
+        defer { resetChat() }
         KodifChat.tokenProvider = { completion in DispatchQueue.global().async { completion("test-jwt") } }
         KodifChat.customContext = ["screen": "cart"]
         let recorder = Recorder()
         KodifChat.delegate = recorder
-        defer {
-            KodifChat.tokenProvider = nil
-            KodifChat.customContext = nil
-            KodifChat.delegate = nil
-            KodifChat.unreadCount = 0
-        }
 
         let requestToken = expectation(description: "requestToken")
         let reply = expectation(description: "reply")
@@ -80,9 +85,10 @@ final class WebViewIntegrationTests: XCTestCase {
     /// target=_blank one (createWebViewWith).
     @MainActor
     func testLinksReachTheOpenURLPath() async throws {
+        resetChat()
+        defer { resetChat() }
         let recorder = Recorder()
         KodifChat.delegate = recorder
-        defer { KodifChat.delegate = nil }
         let started = expectation(description: "widget started")
         let session = try makeSession(bundle: stubWidget)
         defer { session.invalidate() }
@@ -107,17 +113,25 @@ final class WebViewIntegrationTests: XCTestCase {
 
     @MainActor
     func testABundleThatFailsToLoadIsReportedAndReloaded() async throws {
-        // .invalid never resolves, so the module script fails to load and its onerror reports it.
+        resetChat()
+        defer { resetChat() }
+        // Nothing listens on port 1, so the connection is refused at once (like a device that's offline) and the
+        // module script's onerror reports it. Loopback, so it doesn't depend on the runner's DNS.
         let recorder = Recorder()
         KodifChat.delegate = recorder
-        defer { KodifChat.delegate = nil }
-        let bundleURL = try XCTUnwrap(URL(string: "https://kodif-chat.invalid/chat-widget.js"))
+        let bundleURL = try XCTUnwrap(URL(string: "https://127.0.0.1:1/chat-widget.js"))
 
         let first = expectation(description: "first load reported unavailable")
         recorder.onUnavailable = { first.fulfill() }
         let session = KodifChatSession(configuration: .init(integrationId: "i", environment: .custom(bundleURL: bundleURL)))
         defer { session.invalidate() }
-        await fulfillment(of: [first], timeout: 30)
+        let result = await XCTWaiter().fulfillment(of: [first], timeout: 30)
+        if result != .completed {
+            // Tell a fetch that's still pending (readyState "loading") from an onerror that never reached native.
+            let state = try? await evaluate(session.webView, "document.readyState")
+            XCTFail("the failed load wasn't reported; document.readyState = \(String(describing: state))")
+            return
+        }
 
         let second = expectation(description: "reload reported unavailable")
         recorder.onUnavailable = { second.fulfill() }
